@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="毛发与深色小目标计数工具" />
+  <title>毛发计数器</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="auth-screen" id="authScreen" hidden>
+    <section class="login-panel" aria-labelledby="loginTitle">
+      <div class="login-brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div><strong>毛发计数器</strong><span>机构工作台</span></div>
+      </div>
+      <div class="login-heading">
+        <h1 id="loginTitle">登录账号</h1>
+        <p>使用管理员分配的机构账号进入系统</p>
+      </div>
+      <form id="loginForm" class="stack-form">
+        <label>用户名<input id="loginUsername" name="username" type="text" autocomplete="username" minlength="3" maxlength="32" required /></label>
+        <label>密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" required /></label>
+        <button class="primary-button" type="submit"><span class="button-label">登录</span><span class="spinner" aria-hidden="true"></span></button>
+        <p class="form-message" id="loginMessage" role="alert"></p>
+      </form>
+    </section>
+  </main>
+
+  <div class="app-shell" id="appShell" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <h1>毛发计数器</h1>
+          <p>快速计数，结果清晰可核对</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <div class="view-switch" id="viewSwitch" hidden>
+          <button type="button" class="active" data-app-view="tool">计数工具</button>
+          <button type="button" data-app-view="admin">账户管理</button>
+        </div>
+        <div class="account-meter">
+          <span><small id="accountName">—</small><strong id="accountBalance">¥0.00</strong></span>
+          <span><small>单价</small><strong id="accountPrice">¥0.00 / 根</strong></span>
+        </div>
+        <div class="status-pill" id="serviceStatus"><span class="status-dot"></span><span>正在连接</span></div>
+        <button class="logout-button" id="logoutButton" type="button">退出</button>
+      </div>
+    </header>
+
+    <main class="workspace" id="toolView">
+      <aside class="control-panel card">
+        <section>
+          <div class="section-heading">
+            <span class="step">1</span>
+            <div><h2>选择图片</h2><p>选择一张清晰图片</p></div>
+          </div>
+
+          <label class="drop-zone" id="dropZone" for="fileInput">
+            <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/bmp" capture="environment" hidden />
+            <div class="upload-icon" aria-hidden="true">↑</div>
+            <strong>拍照、选择或拖入图片</strong>
+            <span id="uploadLimits">支持 JPG、PNG、WebP、BMP，最大 20 MB</span>
+          </label>
+
+          <div class="file-row" id="fileRow" hidden>
+            <div class="file-thumb"><img id="fileThumb" alt="图片缩略图" /></div>
+            <div class="file-meta">
+              <strong id="fileName"></strong>
+              <span id="fileInfo"></span>
+            </div>
+            <button class="icon-button" id="removeFile" type="button" title="移除图片">×</button>
+          </div>
+
+        </section>
+
+        <div class="divider"></div>
+
+        <section>
+          <div class="section-heading">
+            <span class="step">2</span>
+            <div><h2>识别参数</h2><p>浅色、干净背景效果更佳</p></div>
+          </div>
+
+          <div class="field-group">
+            <div class="field-label">
+              <label for="sensitivity">识别灵敏度</label>
+              <output id="sensitivityValue">标准</output>
+            </div>
+            <input id="sensitivity" type="range" min="-20" max="20" value="0" step="1" />
+            <div class="range-labels"><span>更严格</span><span>更灵敏</span></div>
+          </div>
+
+          <div class="field-group">
+            <div class="field-label">
+              <label for="contrast">最低局部对比度</label>
+              <output id="contrastValue">35</output>
+            </div>
+            <input id="contrast" type="range" min="5" max="100" value="35" step="1" />
+            <div class="range-labels"><span>保留浅目标</span><span>过滤污点</span></div>
+          </div>
+
+          <label class="switch-row">
+            <span><strong>忽略边缘目标</strong><small>不统计接触图片边缘的残缺目标</small></span>
+            <input id="excludeBorder" type="checkbox" />
+            <i></i>
+          </label>
+
+          <button class="primary-button" id="analyzeButton" type="button" disabled>
+            <span class="button-label">开始识别</span>
+            <span class="spinner" aria-hidden="true"></span>
+          </button>
+          <div class="billing-rule"><span>自动识别结果计费</span><strong id="currentUnitPrice">¥0.00 / 根</strong></div>
+          <p class="error-message" id="errorMessage" role="alert"></p>
+          <div class="billing-receipt" id="billingReceipt" hidden>
+            <span>本次扣费</span>
+            <strong id="billingCharge">¥0.00</strong>
+            <small id="billingDetail">0 根 · 余额 ¥0.00</small>
+          </div>
+        </section>
+      </aside>
+
+      <section class="result-panel">
+        <div class="empty-state card" id="emptyState">
+          <div class="empty-visual" aria-hidden="true">
+            <div class="scan-line"></div>
+            <span class="particle p1"></span><span class="particle p2"></span>
+            <span class="particle p3"></span><span class="particle p4"></span>
+            <span class="particle p5"></span><span class="particle p6"></span>
+          </div>
+          <h2>还没有计数结果</h2>
+          <p>识别结果将在这里显示</p>
+        </div>
+
+        <div id="resultView" hidden>
+          <div class="summary-grid">
+            <article class="metric-card card primary-metric">
+              <span>当前数量</span><strong id="countMetric">0</strong><small id="manualHint">识别结果</small>
+            </article>
+            <article class="metric-card card">
+              <span>边缘目标</span><strong id="partialMetric">0</strong><small>可能为不完整目标</small>
+            </article>
+            <article class="metric-card card">
+              <span>平均可信度</span><strong id="confidenceMetric">—</strong><small>识别结果参考</small>
+            </article>
+            <article class="metric-card card">
+              <span>处理时间</span><strong id="processingMetric">—</strong><small>本次识别用时</small>
+            </article>
+          </div>
+
+          <div class="viewer-card card">
+            <div class="viewer-toolbar">
+              <div><h2>识别结果</h2><p>可添加、删除或恢复目标标记</p></div>
+              <div class="tool-actions">
+                <button class="toolbar-button active" data-mode="view" type="button">查看</button>
+                <button class="toolbar-button" data-mode="add" type="button">＋ 添加</button>
+                <button class="toolbar-button" data-mode="remove" type="button">－ 删除</button>
+                <button class="toolbar-button subtle" id="restoreButton" type="button">恢复</button>
+              </div>
+            </div>
+
+            <div class="canvas-wrap" id="canvasWrap">
+              <canvas id="resultCanvas"></canvas>
+              <div class="canvas-tip" id="canvasTip">点击已有标记即可删除</div>
+            </div>
+
+            <div class="viewer-footer">
+              <div class="legend">
+                <span><i class="legend-box normal"></i>完整目标</span>
+                <span><i class="legend-box partial"></i>边缘目标</span>
+                <span><i class="legend-box manual"></i>手动添加</span>
+              </div>
+              <div class="download-actions">
+                <button class="secondary-button" id="downloadJson" type="button">导出 JSON</button>
+                <button class="secondary-button" id="downloadImage" type="button">下载标注图</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="details-card card">
+            <div class="details-header">
+              <div><h2>目标明细</h2><p>查看每个目标的位置与状态</p></div>
+              <span id="itemTotalBadge">0 项</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>编号</th><th>中心坐标</th><th>尺寸</th><th>簇内数量</th><th>对比度</th><th>可信度</th><th>状态</th></tr></thead>
+                <tbody id="itemsTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <main class="admin-workspace" id="adminView" hidden>
+      <div class="admin-heading">
+        <div><span class="eyebrow">ADMIN CONSOLE</span><h2>账户与计费</h2><p>管理机构账号、单价、余额和识别流水</p></div>
+        <button class="primary-action" id="createAccountButton" type="button">新建账号</button>
+      </div>
+
+      <section class="admin-summary" aria-label="账户汇总">
+        <div><span>客户账号</span><strong id="adminAccountCount">0</strong><small>当前有效机构</small></div>
+        <div><span>可用余额</span><strong id="adminTotalBalance">¥0.00</strong><small>全部客户合计</small></div>
+        <div><span>累计识别</span><strong id="adminTotalStrands">0</strong><small>已计费根数</small></div>
+        <div><span>累计消费</span><strong id="adminTotalSpent">¥0.00</strong><small>历史扣费合计</small></div>
+      </section>
+
+      <section class="admin-table-section">
+        <div class="admin-section-heading"><div><h3>机构账号</h3><p>单价修改仅影响后续识别</p></div><button class="secondary-button" id="refreshAdminButton" type="button">刷新</button></div>
+        <div class="table-wrap admin-table-wrap">
+          <table>
+            <thead><tr><th>机构</th><th>用户名</th><th>单价</th><th>余额</th><th>累计根数</th><th>累计消费</th><th>状态</th><th>最近使用</th><th></th></tr></thead>
+            <tbody id="adminAccountsTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="admin-table-section">
+        <div class="admin-section-heading"><div><h3>最近流水</h3><p>自动扣费与管理员余额调整</p></div><span id="ledgerCount">0 条</span></div>
+        <div class="table-wrap admin-table-wrap ledger-table-wrap">
+          <table>
+            <thead><tr><th>时间</th><th>机构</th><th>类型</th><th>根数</th><th>金额</th><th>扣后余额</th><th>操作人 / 备注</th></tr></thead>
+            <tbody id="adminLedgerTable"></tbody>
+          </table>
+        </div>
+      </section>
+      <p class="admin-message" id="adminMessage" role="status"></p>
+    </main>
+  </div>
+
+  <dialog class="admin-dialog" id="createAccountDialog">
+    <form method="dialog" class="dialog-shell" id="createAccountForm">
+      <div class="dialog-heading"><div><span>新客户</span><h2>创建机构账号</h2></div><button type="button" class="icon-button dialog-close" aria-label="关闭">×</button></div>
+      <div class="dialog-fields two-columns">
+        <label>机构名称<input name="display_name" type="text" maxlength="64" required /></label>
+        <label>登录用户名<input name="username" type="text" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.-]+" required /></label>
+        <label>初始密码<input name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required /></label>
+        <label>每根单价（元）<input name="unit_price_yuan" type="number" min="0" step="0.01" inputmode="decimal" value="0.10" required /></label>
+      </div>
+      <p class="form-message" data-dialog-message></p>
+      <div class="dialog-actions"><button type="button" class="secondary-button dialog-close">取消</button><button type="submit" class="primary-action">创建账号</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="admin-dialog" id="manageAccountDialog">
+    <div class="dialog-shell">
+      <div class="dialog-heading"><div><span id="manageUsername">账号</span><h2 id="manageAccountTitle">管理机构</h2></div><button type="button" class="icon-button dialog-close" aria-label="关闭">×</button></div>
+      <form id="accountSettingsForm" class="dialog-section">
+        <h3>账号设置</h3>
+        <div class="dialog-fields two-columns">
+          <label>机构名称<input name="display_name" type="text" maxlength="64" required /></label>
+          <label>每根单价（元）<input name="unit_price_yuan" type="number" min="0" step="0.01" inputmode="decimal" required /></label>
+        </div>
+        <label class="switch-row compact"><span><strong>账号启用</strong><small>停用后现有会话立即失效</small></span><input name="active" type="checkbox" /><i></i></label>
+        <button class="secondary-button" type="submit">保存设置</button>
+      </form>
+      <form id="balanceAdjustmentForm" class="dialog-section">
+        <h3>余额调整</h3>
+        <div class="dialog-fields two-columns">
+          <label>调整金额（元）<input name="amount_yuan" type="number" step="0.01" inputmode="decimal" placeholder="充值填正数，冲减填负数" required /></label>
+          <label>备注<input name="note" type="text" maxlength="200" placeholder="例如：线下收款" required /></label>
+        </div>
+        <button class="secondary-button" type="submit">提交调整</button>
+      </form>
+      <form id="passwordResetForm" class="dialog-section">
+        <h3>重置密码</h3>
+        <div class="dialog-fields password-row"><label>新密码<input name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required /></label><button class="secondary-button" type="submit">重置并退出该账号</button></div>
+      </form>
+      <p class="form-message" data-dialog-message></p>
+      <div class="dialog-actions"><button type="button" class="secondary-button dialog-close">完成</button></div>
+    </div>
+  </dialog>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+"""Hair counter backend package."""

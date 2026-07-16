@@ -1,0 +1,59 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.m.daocloud.io}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+    environment:
+      APP_VERSION: ${APP_VERSION:-1.0.0}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-20971520}
+      MAX_IMAGE_PIXELS: ${MAX_IMAGE_PIXELS:-20000000}
+      MAX_IMAGE_SIDE: ${MAX_IMAGE_SIDE:-6000}
+      MAX_PROCESSING_CONCURRENCY: ${MAX_PROCESSING_CONCURRENCY:-2}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-45}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
+      DATABASE_PATH: ${DATABASE_PATH:-/data/hair-counter.db}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 4s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    volumes:
+      - hair_data:/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.m.daocloud.io}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  default:
+    name: hair-counter-network
+
+volumes:
+  hair_data:
