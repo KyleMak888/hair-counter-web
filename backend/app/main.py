@@ -198,6 +198,7 @@ def create_account(
             payload.display_name,
             payload.password,
             payload.unit_price_fen,
+            payload.plan,
         )
     except DatabaseError as exc:
         raise _database_http_error(exc) from exc
@@ -217,6 +218,7 @@ def update_account(
             display_name=payload.display_name,
             unit_price_fen=payload.unit_price_fen,
             active=payload.active,
+            plan=payload.plan,
         )
     except DatabaseError as exc:
         raise _database_http_error(exc) from exc

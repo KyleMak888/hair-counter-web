@@ -131,13 +131,39 @@ async function apiJson(url, options = {}) {
   return payload;
 }
 
+function isSvip(account = state.me) {
+  return account?.plan === "svip";
+}
+
+async function refreshCurrentAccount() {
+  state.me = await apiJson("/api/me", { cache: "no-store" });
+  updateAccountHeader();
+  return state.me;
+}
+
+function applyBillingState(billing) {
+  if (!state.me || !billing) return;
+  state.me.plan = billing.plan || "standard";
+  state.me.balance_fen = billing.balance_fen;
+  if (state.me.plan === "standard") state.me.unit_price_fen = billing.unit_price_fen;
+  updateAccountHeader();
+}
+
 function updateAccountHeader() {
   if (!state.me) return;
+  const svip = isSvip();
+  $("#standardAccountMeter").hidden = svip;
+  $("#svipAccount").hidden = !svip;
   $("#accountName").textContent = state.me.display_name;
+  $("#svipAccountName").textContent = state.me.display_name;
   $("#accountBalance").textContent = formatMoney(state.me.balance_fen);
   $("#accountPrice").textContent = `${formatMoney(state.me.unit_price_fen)} / 根`;
-  $("#currentUnitPrice").textContent = `${formatMoney(state.me.unit_price_fen)} / 根`;
-  $("#batchCurrentUnitPrice").textContent = `${formatMoney(state.me.unit_price_fen)} / 根`;
+  $("#singleBillingLabel").textContent = svip ? "SVIP 专属权益" : "自动识别结果计费";
+  $("#batchBillingLabel").textContent = svip ? "SVIP 专属权益" : "自动识别结果计费";
+  $("#currentUnitPrice").textContent = svip ? "无限使用" : `${formatMoney(state.me.unit_price_fen)} / 根`;
+  $("#batchCurrentUnitPrice").textContent = svip ? "无限使用" : `${formatMoney(state.me.unit_price_fen)} / 根`;
+  $("#singleBillingRule").classList.toggle("svip", svip);
+  $("#batchBillingRule").classList.toggle("svip", svip);
   $("#viewSwitch").hidden = state.me.role !== "admin";
 }
 
@@ -226,20 +252,26 @@ function formatDate(value) {
 
 function renderAdmin() {
   const accounts = state.adminAccounts.filter((account) => account.role === "user");
+  const standardAccounts = accounts.filter((account) => !isSvip(account));
   $("#adminAccountCount").textContent = accounts.filter((account) => account.active).length;
-  $("#adminTotalBalance").textContent = formatMoney(accounts.reduce((sum, account) => sum + account.balance_fen, 0));
+  $("#adminTotalBalance").textContent = formatMoney(standardAccounts.reduce((sum, account) => sum + account.balance_fen, 0));
   $("#adminTotalStrands").textContent = accounts.reduce((sum, account) => sum + account.total_billable_count, 0).toLocaleString("zh-CN");
   $("#adminTotalSpent").textContent = formatMoney(accounts.reduce((sum, account) => sum + account.total_spent_fen, 0));
 
   const accountBody = $("#adminAccountsTable");
-  accountBody.innerHTML = accounts.length ? accounts.map((account) => `<tr>
+  accountBody.innerHTML = accounts.length ? accounts.map((account) => {
+    const svip = isSvip(account);
+    return `<tr>
     <td>${escapeHtml(account.display_name)}</td><td>${escapeHtml(account.username)}</td>
-    <td>${formatMoney(account.unit_price_fen)} / 根</td><td>${formatMoney(account.balance_fen)}</td>
+    <td><span class="plan-tag ${svip ? "svip" : "standard"}">${svip ? "SVIP" : "按量"}</span></td>
+    <td>${svip ? '<span class="svip-table-value">买断</span>' : `${formatMoney(account.unit_price_fen)} / 根`}</td>
+    <td>${svip ? '<span class="svip-table-value">不限量</span>' : formatMoney(account.balance_fen)}</td>
     <td>${Number(account.total_billable_count).toLocaleString("zh-CN")}</td><td>${formatMoney(account.total_spent_fen)}</td>
     <td><span class="status-tag ${account.active ? "normal" : "partial"}">${account.active ? "启用" : "停用"}</span></td>
     <td>${formatDate(account.last_recognition_at)}</td>
     <td><button type="button" class="table-action" data-manage-account="${account.id}">管理</button></td>
-  </tr>`).join("") : '<tr><td class="empty-row" colspan="9">还没有客户账号</td></tr>';
+  </tr>`;
+  }).join("") : '<tr><td class="empty-row" colspan="10">还没有客户账号</td></tr>';
 
   const ledgerBody = $("#adminLedgerTable");
   ledgerBody.innerHTML = state.adminLedger.length ? state.adminLedger.map((entry) => `<tr>
@@ -279,6 +311,18 @@ function closeDialog(dialog) {
   dialogMessage(dialog);
 }
 
+function updatePlanFields(form) {
+  const svip = form.elements.plan?.value === "svip";
+  const priceField = form.querySelector("[data-plan-price]");
+  if (priceField) {
+    priceField.hidden = svip;
+    priceField.querySelector("input").disabled = svip;
+  }
+  if (form.id === "accountSettingsForm") {
+    $("#balanceAdjustmentForm").hidden = svip;
+  }
+}
+
 function openManagedAccount(accountId) {
   const account = state.adminAccounts.find((item) => item.id === Number(accountId));
   if (!account) return;
@@ -288,7 +332,9 @@ function openManagedAccount(accountId) {
   const form = $("#accountSettingsForm");
   form.elements.display_name.value = account.display_name;
   form.elements.unit_price_yuan.value = (account.unit_price_fen / 100).toFixed(2);
+  form.elements.plan.value = account.plan || "standard";
   form.elements.active.checked = account.active;
+  updatePlanFields(form);
   $("#balanceAdjustmentForm").reset();
   $("#passwordResetForm").reset();
   dialogMessage($("#manageAccountDialog"));
@@ -432,6 +478,7 @@ async function analyze() {
   let receivedResponse = false;
 
   try {
+    await refreshCurrentAccount();
     const form = new FormData();
     form.append("file", uploadFile, uploadFile.name);
     const params = new URLSearchParams({
@@ -466,15 +513,19 @@ async function analyze() {
     if (requestVersion !== state.requestVersion) return;
 
     state.response = payload;
-    state.me.balance_fen = payload.billing.balance_fen;
-    updateAccountHeader();
+    applyBillingState(payload.billing);
     state.autoItems = payload.items.map((item) => ({ ...item, manual: false }));
     state.items = state.autoItems.map(cloneItem);
     state.dirty = false;
     setEditMode("view");
     renderAll();
-    $("#billingCharge").textContent = formatMoney(payload.billing.charged_amount_fen);
-    $("#billingDetail").textContent = `${payload.billing.billable_count} 根 · 余额 ${formatMoney(payload.billing.balance_fen)}`;
+    const svip = payload.billing.plan === "svip";
+    $("#billingReceipt").classList.toggle("svip", svip);
+    $("#billingReceiptLabel").textContent = svip ? "SVIP 权益已生效" : "本次扣费";
+    $("#billingCharge").textContent = svip ? "权益免扣" : formatMoney(payload.billing.charged_amount_fen);
+    $("#billingDetail").textContent = svip
+      ? `${payload.billing.billable_count} 根 · 不扣余额`
+      : `${payload.billing.billable_count} 根 · 余额 ${formatMoney(payload.billing.balance_fen)}`;
     $("#billingReceipt").hidden = false;
     $("#emptyState").hidden = true;
     $("#resultView").hidden = false;
@@ -669,18 +720,21 @@ async function createAdminAccount(event) {
   setFormBusy(form, true);
   dialogMessage(dialog);
   try {
+    const plan = form.elements.plan.value;
     const payload = await apiJson("/api/admin/accounts", {
       method: "POST",
       body: JSON.stringify({
         username: form.elements.username.value.trim(),
         display_name: form.elements.display_name.value.trim(),
         password: form.elements.password.value,
-        unit_price_fen: yuanToFen(form.elements.unit_price_yuan.value),
+        unit_price_fen: plan === "standard" ? yuanToFen(form.elements.unit_price_yuan.value) : 0,
+        plan,
       }),
     });
     replaceAdminAccount(payload);
     closeDialog(dialog);
     form.reset();
+    updatePlanFields(form);
     await loadAdmin();
     $("#adminMessage").textContent = `已创建账号 ${payload.username}`;
   } catch (error) {
@@ -697,16 +751,23 @@ async function saveAccountSettings(event) {
   setFormBusy(form, true);
   dialogMessage(dialog);
   try {
+    const plan = form.elements.plan.value;
+    const body = {
+      display_name: form.elements.display_name.value.trim(),
+      active: form.elements.active.checked,
+      plan,
+    };
+    if (plan === "standard") {
+      body.unit_price_fen = yuanToFen(form.elements.unit_price_yuan.value);
+    }
     const account = await apiJson(`/api/admin/accounts/${state.managedAccountId}`, {
       method: "PATCH",
-      body: JSON.stringify({
-        display_name: form.elements.display_name.value.trim(),
-        unit_price_fen: yuanToFen(form.elements.unit_price_yuan.value),
-        active: form.elements.active.checked,
-      }),
+      body: JSON.stringify(body),
     });
     replaceAdminAccount(account);
     $("#manageAccountTitle").textContent = account.display_name;
+    form.elements.plan.value = account.plan;
+    updatePlanFields(form);
     dialogMessage(dialog, "账号设置已保存", true);
     await loadAdmin();
   } catch (error) {
@@ -938,7 +999,7 @@ function renderBatchQueue() {
       <div class="batch-item-info">
         <strong>${escapeHtml(item.sourceFile.name)}</strong>
         <span>${item.width} × ${item.height}${item.resized ? " · 已缩放" : ""}</span>
-        ${item.response ? `<span class="batch-item-count">${count} 根 · ${formatMoney(item.response.billing?.charged_amount_fen || 0)}</span>` : ""}
+        ${item.response ? `<span class="batch-item-count">${count} 根 · ${item.response.billing?.plan === "svip" ? "SVIP" : formatMoney(item.response.billing?.charged_amount_fen || 0)}</span>` : ""}
         ${errorMsg}
       </div>
       <span class="batch-item-status status-tag ${statusClass}">${statusText}</span>
@@ -963,6 +1024,12 @@ function viewBatchItem(index) {
 async function analyzeBatch() {
   const pending = state.batchQueue.filter((item) => item.status === "pending" || item.status === "error");
   if (!pending.length) return;
+  try {
+    await refreshCurrentAccount();
+  } catch (error) {
+    if (state.me) showBatchError(error.message || "无法刷新账户信息");
+    return;
+  }
   state.batchProcessing = true;
   batchAnalyzeButton.disabled = true;
   batchAnalyzeButton.classList.add("loading");
@@ -1048,8 +1115,7 @@ async function analyzeBatch() {
 
     item.status = "done";
     item.response = payload;
-    state.me.balance_fen = payload.billing?.balance_fen ?? state.me.balance_fen;
-    updateAccountHeader();
+    applyBillingState(payload.billing);
     processed += 1;
     renderBatchQueue();
   }
@@ -1081,6 +1147,7 @@ function updateBatchSummary() {
   const completed = state.batchQueue.filter((item) => item.status === "done" && item.response);
   $("#batchSummary").hidden = completed.length === 0;
   $("#batchExport").hidden = completed.length === 0;
+  $("#batchSummary").classList.remove("svip");
   if (!completed.length) return;
   const totalCount = completed.reduce(
     (sum, item) => sum + totalStrands(item.response.items.map((entry) => ({ ...entry, manual: false }))),
@@ -1090,9 +1157,13 @@ function updateBatchSummary() {
     (sum, item) => sum + (item.response.billing?.charged_amount_fen || 0),
     0,
   );
+  const allSvip = completed.every((item) => item.response.billing?.plan === "svip");
+  $("#batchSummary").classList.toggle("svip", allSvip);
   $("#batchTotalCount").textContent = totalCount;
-  $("#batchTotalCharge").textContent = formatMoney(totalCharged);
-  $("#batchBalance").textContent = formatMoney(state.me?.balance_fen);
+  $("#batchChargeLabel").textContent = allSvip ? "本批权益" : "总扣费";
+  $("#batchTotalCharge").textContent = allSvip ? "免扣" : formatMoney(totalCharged);
+  $("#batchBalanceLabel").textContent = allSvip || isSvip() ? "当前权益" : "当前余额";
+  $("#batchBalance").textContent = allSvip || isSvip() ? "无限使用" : formatMoney(state.me?.balance_fen);
 }
 
 function exportBatchJson() {
@@ -1167,7 +1238,9 @@ $$("[data-app-view]").forEach((button) => button.addEventListener("click", () =>
 $("#refreshAdminButton").addEventListener("click", loadAdmin);
 $("#createAccountButton").addEventListener("click", () => {
   const dialog = $("#createAccountDialog");
-  $("#createAccountForm").reset();
+  const form = $("#createAccountForm");
+  form.reset();
+  updatePlanFields(form);
   dialogMessage(dialog);
   dialog.showModal();
 });
@@ -1180,5 +1253,6 @@ $("#accountSettingsForm").addEventListener("submit", saveAccountSettings);
 $("#balanceAdjustmentForm").addEventListener("submit", submitBalanceAdjustment);
 $("#passwordResetForm").addEventListener("submit", submitPasswordReset);
 $$(".dialog-close").forEach((button) => button.addEventListener("click", () => closeDialog(button.closest("dialog"))));
+$$(".plan-selector input[name='plan']").forEach((input) => input.addEventListener("change", () => updatePlanFields(input.form)));
 
 checkHealth().then(loadSession);

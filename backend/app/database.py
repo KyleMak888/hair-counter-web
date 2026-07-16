@@ -11,6 +11,7 @@ from typing import Any
 
 
 PASSWORD_ITERATIONS = 600_000
+ACCOUNT_PLANS = {"standard", "svip"}
 
 
 class DatabaseError(Exception):
@@ -79,6 +80,14 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _recognition_payload(response_json: str) -> dict[str, Any]:
+    payload = json.loads(response_json)
+    billing = payload.get("billing")
+    if isinstance(billing, dict):
+        billing.setdefault("plan", "standard")
+    return payload
+
+
 class Database:
     def __init__(self, path: str, session_ttl_seconds: int = 7 * 24 * 60 * 60) -> None:
         self.path = path
@@ -110,6 +119,7 @@ class Database:
                     display_name TEXT NOT NULL,
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+                    plan TEXT NOT NULL DEFAULT 'standard' CHECK (plan IN ('standard', 'svip')),
                     active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
                     unit_price_fen INTEGER NOT NULL DEFAULT 0 CHECK (unit_price_fen >= 0),
                     balance_fen INTEGER NOT NULL DEFAULT 0 CHECK (balance_fen >= 0),
@@ -167,6 +177,18 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
                 """
             )
+            account_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(accounts)").fetchall()
+            }
+            if "plan" not in account_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE accounts
+                    ADD COLUMN plan TEXT NOT NULL DEFAULT 'standard'
+                    CHECK (plan IN ('standard', 'svip'))
+                    """
+                )
 
     @staticmethod
     def _account(row: sqlite3.Row) -> dict[str, Any]:
@@ -176,6 +198,7 @@ class Database:
             "username": str(row["username"]),
             "display_name": str(row["display_name"]),
             "role": str(row["role"]),
+            "plan": str(row["plan"]) if "plan" in keys else "standard",
             "active": bool(row["active"]),
             "unit_price_fen": int(row["unit_price_fen"]),
             "balance_fen": int(row["balance_fen"]),
@@ -318,7 +341,12 @@ class Database:
         display_name: str,
         password: str,
         unit_price_fen: int,
+        plan: str = "standard",
     ) -> dict[str, Any]:
+        if plan not in ACCOUNT_PLANS:
+            raise DatabaseError("客户类型无效")
+        if plan == "svip" and unit_price_fen != 0:
+            raise DatabaseError("SVIP 买断账户不能设置单价")
         now = _now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -327,14 +355,15 @@ class Database:
                     cursor = connection.execute(
                         """
                         INSERT INTO accounts (
-                            username, display_name, password_hash, role, active,
+                            username, display_name, password_hash, role, plan, active,
                             unit_price_fen, balance_fen, created_at, updated_at
-                        ) VALUES (?, ?, ?, 'user', 1, ?, 0, ?, ?)
+                        ) VALUES (?, ?, ?, 'user', ?, 1, ?, 0, ?, ?)
                         """,
                         (
                             username,
                             display_name,
                             hash_password(password),
+                            plan,
                             unit_price_fen,
                             now,
                             now,
@@ -348,7 +377,11 @@ class Database:
                     admin_account_id,
                     account_id,
                     "create_account",
-                    {"username": username, "unit_price_fen": unit_price_fen},
+                    {
+                        "username": username,
+                        "plan": plan,
+                        "unit_price_fen": unit_price_fen,
+                    },
                 )
                 connection.commit()
             except Exception:
@@ -391,7 +424,10 @@ class Database:
         display_name: str | None = None,
         unit_price_fen: int | None = None,
         active: bool | None = None,
+        plan: str | None = None,
     ) -> dict[str, Any]:
+        if plan is not None and plan not in ACCOUNT_PLANS:
+            raise DatabaseError("客户类型无效")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -403,6 +439,12 @@ class Database:
                     raise AccountNotFound(account_id)
                 if current["role"] == "admin" and active is False:
                     raise DatabaseError("管理员账号不能停用")
+                current_plan = str(current["plan"])
+                target_plan = plan or current_plan
+                if current["role"] == "admin" and target_plan != "standard":
+                    raise DatabaseError("管理员账号不能设为 SVIP")
+                if target_plan == "svip" and unit_price_fen is not None:
+                    raise DatabaseError("SVIP 期间不能修改单价")
 
                 changes: dict[str, Any] = {}
                 if display_name is not None and display_name != current["display_name"]:
@@ -411,6 +453,8 @@ class Database:
                     changes["unit_price_fen"] = unit_price_fen
                 if active is not None and int(active) != current["active"]:
                     changes["active"] = int(active)
+                if plan is not None and plan != current_plan:
+                    changes["plan"] = plan
 
                 if changes:
                     columns = ", ".join(f"{name} = ?" for name in changes)
@@ -476,11 +520,13 @@ class Database:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 row = connection.execute(
-                    "SELECT balance_fen FROM accounts WHERE id = ?",
+                    "SELECT plan, balance_fen FROM accounts WHERE id = ?",
                     (account_id,),
                 ).fetchone()
                 if row is None:
                     raise AccountNotFound(account_id)
+                if row["plan"] == "svip":
+                    raise InvalidBalanceAdjustment("SVIP 买断账户不能调整余额")
                 balance_after = int(row["balance_fen"]) + amount_fen
                 if balance_after < 0:
                     raise InvalidBalanceAdjustment("调整后余额不能小于零")
@@ -531,7 +577,7 @@ class Database:
                 """,
                 (account_id, request_id),
             ).fetchone()
-        return json.loads(row["response_json"]) if row is not None else None
+        return _recognition_payload(row["response_json"]) if row is not None else None
 
     def charge_recognition(
         self,
@@ -552,10 +598,10 @@ class Database:
                 ).fetchone()
                 if existing is not None:
                     connection.commit()
-                    return json.loads(existing["response_json"]), True
+                    return _recognition_payload(existing["response_json"]), True
 
                 account = connection.execute(
-                    "SELECT active, unit_price_fen, balance_fen FROM accounts WHERE id = ?",
+                    "SELECT active, plan, unit_price_fen, balance_fen FROM accounts WHERE id = ?",
                     (account_id,),
                 ).fetchone()
                 if account is None:
@@ -563,10 +609,11 @@ class Database:
                 if not bool(account["active"]):
                     raise AccountDisabled()
 
-                unit_price_fen = int(account["unit_price_fen"])
+                plan = str(account["plan"])
                 balance_fen = int(account["balance_fen"])
+                unit_price_fen = 0 if plan == "svip" else int(account["unit_price_fen"])
                 charged_amount_fen = billable_count * unit_price_fen
-                if balance_fen < charged_amount_fen:
+                if plan == "standard" and balance_fen < charged_amount_fen:
                     raise InsufficientBalance(balance_fen, charged_amount_fen)
                 balance_after_fen = balance_fen - charged_amount_fen
 
@@ -577,6 +624,7 @@ class Database:
                     "unit_price_fen": unit_price_fen,
                     "charged_amount_fen": charged_amount_fen,
                     "balance_fen": balance_after_fen,
+                    "plan": plan,
                 }
                 response_json = json.dumps(
                     payload,
@@ -584,10 +632,11 @@ class Database:
                     separators=(",", ":"),
                 )
                 now = _now()
-                connection.execute(
-                    "UPDATE accounts SET balance_fen = ?, updated_at = ? WHERE id = ?",
-                    (balance_after_fen, now, account_id),
-                )
+                if plan == "standard":
+                    connection.execute(
+                        "UPDATE accounts SET balance_fen = ?, updated_at = ? WHERE id = ?",
+                        (balance_after_fen, now, account_id),
+                    )
                 cursor = connection.execute(
                     """
                     INSERT INTO recognitions (
@@ -606,23 +655,24 @@ class Database:
                         now,
                     ),
                 )
-                connection.execute(
-                    """
-                    INSERT INTO ledger_entries (
-                        account_id, entry_type, amount_fen, balance_after_fen,
-                        billable_count, unit_price_fen, recognition_id, note, created_at
-                    ) VALUES (?, 'charge', ?, ?, ?, ?, ?, '自动识别扣费', ?)
-                    """,
-                    (
-                        account_id,
-                        -charged_amount_fen,
-                        balance_after_fen,
-                        billable_count,
-                        unit_price_fen,
-                        int(cursor.lastrowid),
-                        now,
-                    ),
-                )
+                if plan == "standard":
+                    connection.execute(
+                        """
+                        INSERT INTO ledger_entries (
+                            account_id, entry_type, amount_fen, balance_after_fen,
+                            billable_count, unit_price_fen, recognition_id, note, created_at
+                        ) VALUES (?, 'charge', ?, ?, ?, ?, ?, '自动识别扣费', ?)
+                        """,
+                        (
+                            account_id,
+                            -charged_amount_fen,
+                            balance_after_fen,
+                            billable_count,
+                            unit_price_fen,
+                            int(cursor.lastrowid),
+                            now,
+                        ),
+                    )
                 connection.commit()
                 return payload, False
             except Exception:

@@ -1,7 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
+import json
 from pathlib import Path
+import sqlite3
 import sys
 from tempfile import TemporaryDirectory
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
@@ -9,6 +13,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.database import (  # noqa: E402
     AccountDisabled,
     Database,
+    DatabaseError,
     InsufficientBalance,
     InvalidBalanceAdjustment,
     InvalidCredentials,
@@ -23,6 +28,45 @@ def _database(directory: str) -> tuple[Database, dict]:
     assert database.has_admin()
     admin = database.authenticate("admin", "admin-pass-123")
     return database, admin
+
+
+def test_legacy_database_migration_adds_standard_plan_idempotently() -> None:
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "legacy.db"
+        with sqlite3.connect(path) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    display_name TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+                    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+                    unit_price_fen INTEGER NOT NULL DEFAULT 0 CHECK (unit_price_fen >= 0),
+                    balance_fen INTEGER NOT NULL DEFAULT 0 CHECK (balance_fen >= 0),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO accounts (
+                    username, display_name, password_hash, role, active,
+                    unit_price_fen, balance_fen, created_at, updated_at
+                ) VALUES ('legacy', '历史客户', 'unused', 'user', 1, 12, 345, 'now', 'now')
+                """
+            )
+
+        database = Database(str(path), session_ttl_seconds=3600)
+        database.initialize()
+        database.initialize()
+
+        assert database.get_account(1)["plan"] == "standard"
+        with sqlite3.connect(path) as connection:
+            columns = [row[1] for row in connection.execute("PRAGMA table_info(accounts)")]
+        assert columns.count("plan") == 1
 
 
 def test_account_pricing_idempotency_and_price_snapshot() -> None:
@@ -43,6 +87,7 @@ def test_account_pricing_idempotency_and_price_snapshot() -> None:
             "unit_price_fen": 10,
             "charged_amount_fen": 630,
             "balance_fen": 9_370,
+            "plan": "standard",
         }
 
         replay, replayed = database.charge_recognition(
@@ -67,6 +112,123 @@ def test_account_pricing_idempotency_and_price_snapshot() -> None:
         assert summary["balance_fen"] == 9_320
         assert listed["total_billable_count"] == 65
         assert listed["total_spent_fen"] == 680
+
+
+def test_historical_cached_recognition_defaults_to_standard_plan() -> None:
+    with TemporaryDirectory() as directory:
+        database, admin = _database(directory)
+        account = database.create_account(
+            admin["id"], "historical", "历史缓存机构", "historical-pass-123", 10
+        )
+        database.adjust_balance(admin["id"], account["id"], 1_000, "充值")
+        first, _ = database.charge_recognition(
+            account["id"], "request-historical-0001", 3, {"count": 3}
+        )
+
+        with sqlite3.connect(database.path) as connection:
+            payload = json.loads(
+                connection.execute(
+                    "SELECT response_json FROM recognitions WHERE account_id = ?",
+                    (account["id"],),
+                ).fetchone()[0]
+            )
+            payload["billing"].pop("plan")
+            connection.execute(
+                "UPDATE recognitions SET response_json = ? WHERE account_id = ?",
+                (json.dumps(payload), account["id"]),
+            )
+
+        cached = database.cached_recognition(account["id"], "request-historical-0001")
+        assert cached is not None
+        assert cached["billing"]["plan"] == "standard"
+        replay, replayed = database.charge_recognition(
+            account["id"], "request-historical-0001", 99, {"count": 99}
+        )
+        assert replayed
+        assert replay == cached
+        assert replay["billing"]["charged_amount_fen"] == first["billing"]["charged_amount_fen"]
+
+
+def test_svip_usage_freezes_financials_preserves_sessions_and_tracks_usage() -> None:
+    with TemporaryDirectory() as directory:
+        database, admin = _database(directory)
+        account = database.create_account(
+            admin["id"], "svip", "买断机构", "svip-pass-123", 25
+        )
+        database.adjust_balance(admin["id"], account["id"], 500, "充值")
+        session = database.create_session(account["id"])
+
+        upgraded = database.update_account(
+            admin["id"], account["id"], plan="svip"
+        )
+        assert upgraded["unit_price_fen"] == 25
+        assert upgraded["balance_fen"] == 500
+        assert database.account_for_session(session)["plan"] == "svip"
+
+        free, replayed = database.charge_recognition(
+            account["id"], "request-svip-0001", 40, {"count": 40}
+        )
+        assert not replayed
+        assert free["billing"] == {
+            "request_id": "request-svip-0001",
+            "billable_count": 40,
+            "unit_price_fen": 0,
+            "charged_amount_fen": 0,
+            "balance_fen": 500,
+            "plan": "svip",
+        }
+        replay, replayed = database.charge_recognition(
+            account["id"], "request-svip-0001", 99, {"count": 99}
+        )
+        assert replayed
+        assert replay == free
+        assert database.get_account(account["id"])["balance_fen"] == 500
+        assert not [
+            entry for entry in database.list_ledger() if entry["entry_type"] == "charge"
+        ]
+        listed = next(item for item in database.list_accounts() if item["id"] == account["id"])
+        assert listed["total_billable_count"] == 40
+        assert listed["total_spent_fen"] == 0
+
+        database.update_account(admin["id"], account["id"], active=False)
+        with pytest.raises(AccountDisabled):
+            database.charge_recognition(
+                account["id"], "request-svip-disabled", 1, {"count": 1}
+            )
+        database.update_account(admin["id"], account["id"], active=True)
+
+        with pytest.raises(DatabaseError, match="不能修改单价"):
+            database.update_account(admin["id"], account["id"], unit_price_fen=30)
+        with pytest.raises(InvalidBalanceAdjustment, match="不能调整余额"):
+            database.adjust_balance(admin["id"], account["id"], 100, "错误充值")
+
+        downgraded = database.update_account(
+            admin["id"], account["id"], plan="standard", unit_price_fen=30
+        )
+        assert downgraded["plan"] == "standard"
+        assert downgraded["unit_price_fen"] == 30
+        assert downgraded["balance_fen"] == 500
+        charged, _ = database.charge_recognition(
+            account["id"], "request-standard-after-svip", 2, {"count": 2}
+        )
+        assert charged["billing"]["charged_amount_fen"] == 60
+        assert charged["billing"]["balance_fen"] == 440
+
+        plan_changes = [
+            entry["details"]
+            for entry in database.list_audit_logs()
+            if entry["action"] == "update_account" and "plan" in entry["details"]
+        ]
+        assert {change["plan"] for change in plan_changes} == {"standard", "svip"}
+
+
+def test_new_svip_account_rejects_nonzero_price() -> None:
+    with TemporaryDirectory() as directory:
+        database, admin = _database(directory)
+        with pytest.raises(DatabaseError, match="不能设置单价"):
+            database.create_account(
+                admin["id"], "bad-svip", "错误买断机构", "bad-svip-pass", 10, "svip"
+            )
 
 
 def test_different_accounts_use_independent_prices_and_balances() -> None:

@@ -20,8 +20,9 @@ OpenCV 计数算法 + SQLite 账户账务
 - OpenCV 自动识别和计数；
 - 批量上传多张图片，逐张识别和计费；
 - 自动估算毛发簇中的平行毛发数量；
-- 管理员创建机构账号、设置独立单价并手工充值；
-- 按服务端自动识别根数从预付余额扣费；
+- 管理员创建机构账号，并在按量计费与 SVIP 买断之间转换；
+- 按量客户按服务端自动识别根数从预付余额扣费；
+- SVIP 客户不检查余额、不扣费，仍完整记录识别根数；
 - Cookie 登录会话和请求幂等防重复扣费；
 - 管理员查看余额、累计根数、消费和最近流水；
 - Canvas 绘制编号和目标框；
@@ -146,12 +147,13 @@ curl -X POST \
     "billable_count": 53,
     "unit_price_fen": 10,
     "charged_amount_fen": 530,
-    "balance_fen": 9470
+    "balance_fen": 9470,
+    "plan": "standard"
   }
 }
 ```
 
-`confidence` 是依据目标面积和局部对比度计算的启发式评分，`split_confidence` 是簇内数量的启发式评分，二者都不是机器学习概率。总数为所有 `strand_count` 之和。金额字段统一使用整数“分”。余额不足返回 `402`，不扣款也不返回识别结果。
+`confidence` 是依据目标面积和局部对比度计算的启发式评分，`split_confidence` 是簇内数量的启发式评分，二者都不是机器学习概率。总数为所有 `strand_count` 之和。金额字段统一使用整数“分”。按量客户余额不足返回 `402`，不扣款也不返回识别结果。SVIP 响应的 `plan` 为 `svip`，单价和扣费均为 `0`，余额保持不变。
 
 ### 批量图片计数
 
@@ -160,7 +162,7 @@ POST /api/count/batch
 Content-Type: multipart/form-data
 ```
 
-查询参数与单张计数相同。请求体包含多个 `files` 字段，最多 `MAX_BATCH_SIZE`（默认 10）张图片。每张图片独立计费和幂等缓存，单张失败不影响其余图片。余额不足时停止处理剩余图片。
+查询参数与单张计数相同。请求体包含多个 `files` 字段，最多 `MAX_BATCH_SIZE`（默认 10）张图片。每张图片独立结算和使用幂等缓存，单张失败不影响其余图片。按量客户余额不足时停止处理剩余图片；SVIP 不受余额限制。若处理期间管理员切换客户类型，每张图片按当时类型结算。
 
 ```bash
 curl -X POST \
@@ -195,13 +197,15 @@ curl -X POST \
 |---|---|---|---|
 | `POST` | `/api/auth/login` | 公开 | 登录并设置安全 Cookie |
 | `POST` | `/api/auth/logout` | 登录用户 | 注销当前会话 |
-| `GET` | `/api/me` | 登录用户 | 当前账号、余额和单价 |
-| `GET/POST` | `/api/admin/accounts` | 管理员 | 查询或创建机构账号 |
-| `PATCH` | `/api/admin/accounts/{id}` | 管理员 | 修改名称、单价和状态 |
+| `GET` | `/api/me` | 登录用户 | 当前账号、类型、余额和单价 |
+| `GET/POST` | `/api/admin/accounts` | 管理员 | 查询或创建按量/SVIP 机构账号 |
+| `PATCH` | `/api/admin/accounts/{id}` | 管理员 | 修改名称、类型、单价和状态 |
 | `POST` | `/api/admin/accounts/{id}/balance-adjustments` | 管理员 | 充值或冲减余额 |
 | `POST` | `/api/admin/accounts/{id}/password` | 管理员 | 重置密码并清理会话 |
 | `GET` | `/api/admin/ledger` | 管理员 | 查询最近计费流水 |
 | `GET` | `/api/admin/audit` | 管理员 | 查询管理操作审计 |
+
+账户 `plan` 可取 `standard` 或 `svip`，创建时默认为 `standard`。升级为 SVIP 会保留并冻结原余额和单价，现有会话不失效；恢复按量后继续使用原值，也可在降级请求中同时设置新单价。SVIP 期间不能调整余额或修改单价。
 
 ## 安全与资源限制
 

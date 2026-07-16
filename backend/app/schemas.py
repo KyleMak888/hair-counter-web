@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -24,6 +26,7 @@ class BillingResponse(BaseModel):
     unit_price_fen: int = Field(ge=0)
     charged_amount_fen: int = Field(ge=0)
     balance_fen: int = Field(ge=0)
+    plan: Literal["standard", "svip"] = "standard"
 
 
 class CountResponse(BaseModel):
@@ -69,6 +72,7 @@ class AccountResponse(BaseModel):
     username: str
     display_name: str
     role: str
+    plan: Literal["standard", "svip"] = "standard"
     active: bool
     unit_price_fen: int = Field(ge=0)
     balance_fen: int = Field(ge=0)
@@ -84,12 +88,14 @@ class AccountCreateRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=128)
     unit_price_fen: int = Field(default=0, ge=0)
+    plan: Literal["standard", "svip"] = "standard"
 
 
 class AccountUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=64)
     unit_price_fen: int | None = Field(default=None, ge=0)
     active: bool | None = None
+    plan: Literal["standard", "svip"] | None = None
 
 
 class PasswordResetRequest(BaseModel):
