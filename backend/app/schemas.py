@@ -36,6 +36,29 @@ class CountResponse(BaseModel):
     billing: BillingResponse | None = None
 
 
+class BatchItemError(BaseModel):
+    index: int = Field(ge=0)
+    filename: str
+    error: str
+
+
+class BatchItemResult(BaseModel):
+    index: int = Field(ge=0)
+    filename: str
+    result: CountResponse
+
+
+class BatchCountResponse(BaseModel):
+    batch_id: str
+    total_count: int = Field(ge=0)
+    total_charged_fen: int = Field(ge=0)
+    balance_fen: int = Field(ge=0)
+    succeeded: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    results: list[BatchItemResult]
+    errors: list[BatchItemError]
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=3, max_length=32, pattern=USERNAME_PATTERN)
     password: str = Field(min_length=8, max_length=128)
@@ -109,3 +132,4 @@ class HealthResponse(BaseModel):
     max_upload_bytes: int = Field(gt=0)
     max_image_pixels: int = Field(gt=0)
     max_image_side: int = Field(gt=0)
+    max_batch_size: int = Field(gt=0)

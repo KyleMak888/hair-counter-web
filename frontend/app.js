@@ -4,6 +4,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 let MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 let MAX_SIDE = 6000;
 let MAX_PIXELS = 20_000_000;
+let MAX_BATCH_SIZE = 10;
 
 const state = {
   me: null,
@@ -22,6 +23,14 @@ const state = {
   adminAccounts: [],
   adminLedger: [],
   managedAccountId: null,
+  // Batch mode
+  inputMode: "single",
+  batchQueue: [],
+  batchAdding: false,
+  batchProcessing: false,
+  batchId: null,
+  batchViewIndex: -1,
+  singleViewerState: null,
 };
 
 const fileInput = $("#fileInput");
@@ -95,7 +104,9 @@ async function checkHealth() {
     MAX_UPLOAD_BYTES = Number(data.max_upload_bytes) || MAX_UPLOAD_BYTES;
     MAX_SIDE = Number(data.max_image_side) || MAX_SIDE;
     MAX_PIXELS = Number(data.max_image_pixels) || MAX_PIXELS;
+    MAX_BATCH_SIZE = Number(data.max_batch_size) || MAX_BATCH_SIZE;
     $("#uploadLimits").textContent = `支持 JPG、PNG、WebP、BMP，最大 ${formatBytes(MAX_UPLOAD_BYTES)}`;
+    $("#batchLimits").textContent = `支持 JPG、PNG、WebP、BMP，最多 ${MAX_BATCH_SIZE} 张，最大 ${formatBytes(MAX_UPLOAD_BYTES)} / 张`;
     node.className = "status-pill ok";
     node.querySelector("span:last-child").textContent = "系统正常";
   } catch {
@@ -126,13 +137,17 @@ function updateAccountHeader() {
   $("#accountBalance").textContent = formatMoney(state.me.balance_fen);
   $("#accountPrice").textContent = `${formatMoney(state.me.unit_price_fen)} / 根`;
   $("#currentUnitPrice").textContent = `${formatMoney(state.me.unit_price_fen)} / 根`;
+  $("#batchCurrentUnitPrice").textContent = `${formatMoney(state.me.unit_price_fen)} / 根`;
   $("#viewSwitch").hidden = state.me.role !== "admin";
 }
 
 function showLogin() {
   if (state.me) resetFile();
+  clearBatch();
   $$("dialog[open]").forEach((dialog) => dialog.close());
   state.me = null;
+  state.inputMode = "single";
+  setInputMode("single");
   $("#appShell").hidden = true;
   $("#authScreen").hidden = false;
   $("#loginPassword").value = "";
@@ -390,7 +405,7 @@ async function selectFile(file) {
 function resetFile() {
   state.requestVersion += 1;
   if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
-  Object.assign(state, { sourceFile: null, uploadFile: null, objectUrl: null, image: null, response: null, autoItems: [], items: [], dirty: false, pendingRequestId: null });
+  Object.assign(state, { sourceFile: null, uploadFile: null, objectUrl: null, image: null, response: null, autoItems: [], items: [], dirty: false, pendingRequestId: null, singleViewerState: null });
   fileInput.value = "";
   fileRow.hidden = true;
   dropZone.hidden = false;
@@ -746,6 +761,364 @@ async function submitPasswordReset(event) {
   }
 }
 
+/* ── Batch mode ─────────────────────────────────────── */
+
+const batchFileInput = $("#batchFileInput");
+const batchDropZone = $("#batchDropZone");
+const batchAnalyzeButton = $("#batchAnalyzeButton");
+const batchSensitivity = $("#batchSensitivity");
+const batchContrast = $("#batchContrast");
+
+function captureViewerState() {
+  return {
+    image: state.image,
+    response: state.response,
+    autoItems: state.autoItems,
+    items: state.items,
+    editMode: state.editMode,
+    dirty: state.dirty,
+  };
+}
+
+function applyViewerState(viewer = null) {
+  const next = viewer || {
+    image: null,
+    response: null,
+    autoItems: [],
+    items: [],
+    editMode: "view",
+    dirty: false,
+  };
+  Object.assign(state, next);
+}
+
+function batchViewerState(item) {
+  const autoItems = item.response.items.map((entry) => ({ ...entry, manual: false }));
+  return {
+    image: item.image,
+    response: item.response,
+    autoItems,
+    items: autoItems.map(cloneItem),
+    editMode: "view",
+    dirty: false,
+  };
+}
+
+function setInputMode(mode) {
+  if (mode !== "single" && mode !== "batch") return;
+  const previousMode = state.inputMode;
+  if (previousMode !== mode && mode === "batch") {
+    state.singleViewerState = captureViewerState();
+    const selected = state.batchQueue[state.batchViewIndex];
+    applyViewerState(selected?.response ? batchViewerState(selected) : null);
+  } else if (previousMode !== mode && mode === "single") {
+    applyViewerState(state.singleViewerState);
+    state.singleViewerState = null;
+  }
+
+  state.inputMode = mode;
+  $$("[data-input-mode]").forEach((button) => button.classList.toggle("active", button.dataset.inputMode === mode));
+  $("#singleSection").hidden = mode !== "single";
+  $("#batchSection").hidden = mode !== "batch";
+  $("#batchQueueCard").hidden = mode !== "batch";
+  if (mode === "single") {
+    if (state.response) renderAll();
+    setEditMode(state.editMode);
+    $("#emptyState").hidden = Boolean(state.response);
+    $("#resultView").hidden = !state.response;
+  } else {
+    if (state.response) renderAll();
+    setEditMode(state.editMode);
+    $("#emptyState").hidden = state.batchQueue.length > 0;
+    $("#resultView").hidden = !state.response;
+  }
+}
+
+function clearBatchError() { $("#batchErrorMessage").textContent = ""; }
+function showBatchError(message) { $("#batchErrorMessage").textContent = message; }
+
+async function addBatchFiles(fileList) {
+  clearBatchError();
+  if (state.batchAdding) {
+    showBatchError("图片正在加入队列，请稍候。");
+    return;
+  }
+  const files = [...fileList].filter((file) => file.type.startsWith("image/"));
+  if (!files.length) { showBatchError("请选择有效的图片文件。"); return; }
+  if (state.batchQueue.length + files.length > MAX_BATCH_SIZE) {
+    showBatchError(`批量处理最多 ${MAX_BATCH_SIZE} 张图片。`);
+    return;
+  }
+  state.batchAdding = true;
+  for (const file of files) {
+    try {
+      const normalized = await normalizeImage(file);
+      const objectUrl = URL.createObjectURL(normalized.file);
+      const image = await imageFromUrl(objectUrl);
+      state.batchQueue.push({
+        sourceFile: file,
+        uploadFile: normalized.file,
+        objectUrl,
+        image,
+        width: normalized.width,
+        height: normalized.height,
+        resized: normalized.resized,
+        response: null,
+        error: null,
+        status: "pending",
+        requestKey: requestId(),
+      });
+    } catch (error) {
+      showBatchError(`${file.name}: ${error.message || "图片处理失败"}`);
+    }
+  }
+  state.batchAdding = false;
+  renderBatchQueue();
+  updateBatchSummary();
+  batchAnalyzeButton.disabled = !state.batchQueue.some((item) => item.status === "pending");
+  $("#batchActions").hidden = !state.batchQueue.length;
+  if (state.batchQueue.length) { $("#emptyState").hidden = true; }
+}
+
+function removeBatchItem(index) {
+  if (state.batchProcessing) return;
+  const item = state.batchQueue[index];
+  if (item?.objectUrl) URL.revokeObjectURL(item.objectUrl);
+  state.batchQueue.splice(index, 1);
+  if (state.batchViewIndex === index) {
+    state.batchViewIndex = -1;
+    applyViewerState();
+    $("#resultView").hidden = true;
+  } else if (state.batchViewIndex > index) {
+    state.batchViewIndex -= 1;
+  }
+  renderBatchQueue();
+  updateBatchSummary();
+  batchAnalyzeButton.disabled = !state.batchQueue.some((i) => i.status === "pending" || i.status === "error");
+  $("#batchActions").hidden = !state.batchQueue.length;
+  $("#emptyState").hidden = state.batchQueue.length > 0;
+  $("#batchQueueCard").hidden = state.inputMode !== "batch";
+}
+
+function clearBatch() {
+  if (state.batchProcessing) return;
+  for (const item of state.batchQueue) { if (item.objectUrl) URL.revokeObjectURL(item.objectUrl); }
+  state.batchQueue = [];
+  state.batchViewIndex = -1;
+  state.batchId = null;
+  if (state.inputMode === "batch") applyViewerState();
+  $("#batchProgress").hidden = true;
+  $("#batchActions").hidden = true;
+  clearBatchError();
+  renderBatchQueue();
+  updateBatchSummary();
+  $("#emptyState").hidden = false;
+  $("#resultView").hidden = true;
+}
+
+function batchThresholdOffset() { return -Number(batchSensitivity.value); }
+
+function renderBatchQueue() {
+  const list = $("#batchQueueList");
+  $("#batchQueueCount").textContent = `${state.batchQueue.length} 项`;
+  list.innerHTML = state.batchQueue.map((item, index) => {
+    const count = item.response ? totalStrands(item.response.items.map((i) => ({ ...i, manual: false }))) : 0;
+    const statusMap = {
+      pending: ["等待", "pending"],
+      processing: ["处理中", "processing"],
+      done: [`完成 · ${count} 根`, "done"],
+      error: ["错误", "error"],
+    };
+    const [statusText, statusClass] = statusMap[item.status] || ["未知", "pending"];
+    const active = state.batchViewIndex === index ? " active" : "";
+    const thumb = item.objectUrl ? `<img src="${item.objectUrl}" alt="${escapeHtml(item.sourceFile.name)}" />` : "";
+    const errorMsg = item.error ? `<small class="batch-item-error">${escapeHtml(item.error)}</small>` : "";
+    return `<div class="batch-item ${statusClass}${active}" data-batch-view="${index}">
+      <div class="batch-item-thumb">${thumb}</div>
+      <div class="batch-item-info">
+        <strong>${escapeHtml(item.sourceFile.name)}</strong>
+        <span>${item.width} × ${item.height}${item.resized ? " · 已缩放" : ""}</span>
+        ${item.response ? `<span class="batch-item-count">${count} 根 · ${formatMoney(item.response.billing?.charged_amount_fen || 0)}</span>` : ""}
+        ${errorMsg}
+      </div>
+      <span class="batch-item-status status-tag ${statusClass}">${statusText}</span>
+      ${state.batchProcessing ? "" : `<button type="button" class="icon-button batch-item-remove" data-batch-remove="${index}" title="移除">×</button>`}
+    </div>`;
+  }).join("");
+}
+
+function viewBatchItem(index) {
+  const item = state.batchQueue[index];
+  if (!item || !item.response) return;
+  state.batchViewIndex = index;
+  applyViewerState(batchViewerState(item));
+
+  setEditMode("view");
+  renderAll();
+  $("#emptyState").hidden = true;
+  $("#resultView").hidden = false;
+  renderBatchQueue();
+}
+
+async function analyzeBatch() {
+  const pending = state.batchQueue.filter((item) => item.status === "pending" || item.status === "error");
+  if (!pending.length) return;
+  state.batchProcessing = true;
+  batchAnalyzeButton.disabled = true;
+  batchAnalyzeButton.classList.add("loading");
+  batchAnalyzeButton.querySelector(".button-label").textContent = "批量识别中…";
+  clearBatchError();
+
+  if (!state.batchId) state.batchId = requestId();
+
+  const params = new URLSearchParams({
+    exclude_border: $("#batchExcludeBorder").checked ? "true" : "false",
+    threshold_offset: String(batchThresholdOffset()),
+    min_contrast: String(batchContrast.value),
+  });
+
+  let processed = 0;
+  const toProcess = pending.length;
+
+  $("#batchProgress").hidden = false;
+  $("#batchExport").hidden = true;
+
+  for (const item of pending) {
+    item.status = "processing";
+    item.error = null;
+    renderBatchQueue();
+    updateBatchProgress(processed, toProcess);
+
+    const form = new FormData();
+    form.append("file", item.uploadFile, item.uploadFile.name);
+
+    let networkError = null;
+    let response = null;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        response = await fetch(`/api/count?${params}`, {
+          method: "POST",
+          body: form,
+          headers: { "Idempotency-Key": item.requestKey },
+        });
+        networkError = null;
+        break;
+      } catch (error) {
+        networkError = error;
+      }
+    }
+
+    if (!response) {
+      item.status = "error";
+      item.error = networkError?.message || "网络连接失败";
+      processed += 1;
+      renderBatchQueue();
+      continue;
+    }
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      state.batchProcessing = false;
+      showLogin();
+      $("#loginMessage").textContent = "登录已失效，请重新登录";
+      batchAnalyzeButton.classList.remove("loading");
+      batchAnalyzeButton.querySelector(".button-label").textContent = "开始批量识别";
+      return;
+    }
+
+    if (!response.ok) {
+      item.status = "error";
+      item.error = apiError(payload, "识别失败");
+      processed += 1;
+      renderBatchQueue();
+      if (response.status === 402) {
+        const remaining = state.batchQueue.filter((q) => q.status === "pending");
+        for (const remainingItem of remaining) {
+          remainingItem.status = "error";
+          remainingItem.error = "余额不足，已跳过";
+        }
+        processed = toProcess;
+        showBatchError("余额不足，批量处理已停止。");
+        break;
+      }
+      continue;
+    }
+
+    item.status = "done";
+    item.response = payload;
+    state.me.balance_fen = payload.billing?.balance_fen ?? state.me.balance_fen;
+    updateAccountHeader();
+    processed += 1;
+    renderBatchQueue();
+  }
+
+  state.batchProcessing = false;
+  renderBatchQueue();
+  batchAnalyzeButton.classList.remove("loading");
+  batchAnalyzeButton.querySelector(".button-label").textContent = "开始批量识别";
+  batchAnalyzeButton.disabled = !state.batchQueue.some((i) => i.status === "pending" || i.status === "error");
+  updateBatchProgress(processed, toProcess);
+
+  const succeeded = state.batchQueue.filter((i) => i.status === "done").length;
+  const failed = state.batchQueue.filter((i) => i.status === "error").length;
+  updateBatchSummary();
+  if (failed > 0 && succeeded === 0) {
+    showBatchError("全部图片处理失败，请检查图片格式或余额。");
+  } else if (failed > 0) {
+    showBatchError(`${failed} 张图片处理失败，已跳过。`);
+  }
+}
+
+function updateBatchProgress(processed, total) {
+  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+  $("#batchProgressFill").style.width = `${pct}%`;
+  $("#batchProgressText").textContent = `${processed} / ${total}`;
+}
+
+function updateBatchSummary() {
+  const completed = state.batchQueue.filter((item) => item.status === "done" && item.response);
+  $("#batchSummary").hidden = completed.length === 0;
+  $("#batchExport").hidden = completed.length === 0;
+  if (!completed.length) return;
+  const totalCount = completed.reduce(
+    (sum, item) => sum + totalStrands(item.response.items.map((entry) => ({ ...entry, manual: false }))),
+    0,
+  );
+  const totalCharged = completed.reduce(
+    (sum, item) => sum + (item.response.billing?.charged_amount_fen || 0),
+    0,
+  );
+  $("#batchTotalCount").textContent = totalCount;
+  $("#batchTotalCharge").textContent = formatMoney(totalCharged);
+  $("#batchBalance").textContent = formatMoney(state.me?.balance_fen);
+}
+
+function exportBatchJson() {
+  const completed = state.batchQueue.filter((item) => item.response);
+  if (!completed.length) return;
+  const payload = {
+    batch_id: state.batchId,
+    total_count: completed.reduce((sum, item) => sum + totalStrands(item.response.items.map((i) => ({ ...i, manual: false }))), 0),
+    total_charged_fen: completed.reduce((sum, item) => sum + (item.response.billing?.charged_amount_fen || 0), 0),
+    balance_fen: state.me.balance_fen,
+    items: completed.map((item, index) => ({
+      index,
+      filename: item.sourceFile.name,
+      result: {
+        count: totalStrands(item.response.items.map((i) => ({ ...i, manual: false }))),
+        image_width: item.response.image_width,
+        image_height: item.response.image_height,
+        processing_ms: item.response.processing_ms,
+        billing: item.response.billing,
+        items: item.response.items,
+      },
+    })),
+  };
+  downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }), "hair-count-batch-result.json");
+}
+
 fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
 $("#removeFile").addEventListener("click", resetFile);
 analyzeButton.addEventListener("click", analyze);
@@ -770,6 +1143,24 @@ $$(".toolbar-button[data-mode]").forEach((button) => button.addEventListener("cl
 ["dragleave", "drop"].forEach((eventName) => dropZone.addEventListener(eventName, (event) => { event.preventDefault(); dropZone.classList.remove("dragging"); }));
 dropZone.addEventListener("drop", (event) => selectFile(event.dataTransfer.files[0]));
 
+// Batch mode events
+$$("[data-input-mode]").forEach((button) => button.addEventListener("click", () => setInputMode(button.dataset.inputMode)));
+batchFileInput.addEventListener("change", () => { addBatchFiles(batchFileInput.files); batchFileInput.value = ""; });
+batchAnalyzeButton.addEventListener("click", analyzeBatch);
+$("#batchClearButton").addEventListener("click", clearBatch);
+batchSensitivity.addEventListener("input", () => $("#batchSensitivityValue").textContent = sensitivityLabel(batchSensitivity.value));
+batchContrast.addEventListener("input", () => $("#batchContrastValue").textContent = batchContrast.value);
+["dragenter", "dragover"].forEach((eventName) => batchDropZone.addEventListener(eventName, (event) => { event.preventDefault(); batchDropZone.classList.add("dragging"); }));
+["dragleave", "drop"].forEach((eventName) => batchDropZone.addEventListener(eventName, (event) => { event.preventDefault(); batchDropZone.classList.remove("dragging"); }));
+batchDropZone.addEventListener("drop", (event) => { event.preventDefault(); addBatchFiles(event.dataTransfer.files); });
+$("#batchQueueList").addEventListener("click", (event) => {
+  const removeButton = event.target.closest("[data-batch-remove]");
+  if (removeButton) { removeBatchItem(Number(removeButton.dataset.batchRemove)); return; }
+  const viewItem = event.target.closest("[data-batch-view]");
+  if (viewItem) viewBatchItem(Number(viewItem.dataset.batchView));
+});
+$("#batchDownloadJson").addEventListener("click", exportBatchJson);
+
 $("#loginForm").addEventListener("submit", login);
 $("#logoutButton").addEventListener("click", logout);
 $$("[data-app-view]").forEach((button) => button.addEventListener("click", () => setAppView(button.dataset.appView)));
@@ -790,4 +1181,4 @@ $("#balanceAdjustmentForm").addEventListener("submit", submitBalanceAdjustment);
 $("#passwordResetForm").addEventListener("submit", submitPasswordReset);
 $$(".dialog-close").forEach((button) => button.addEventListener("click", () => closeDialog(button.closest("dialog"))));
 
-Promise.all([checkHealth(), loadSession()]);
+checkHealth().then(loadSession);

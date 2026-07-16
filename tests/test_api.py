@@ -187,3 +187,162 @@ def test_processing_timeout_does_not_charge() -> None:
                 for entry in database.list_ledger()
                 if entry["entry_type"] == "charge"
             ]
+
+
+def test_batch_count_processes_multiple_images_and_charges_per_image() -> None:
+    with TemporaryDirectory() as directory:
+        database, _, user = _configured_database(directory)
+        with patch.object(main_module, "database", database):
+            client = TestClient(main_module.app)
+            client.post(
+                "/api/auth/login",
+                json={"username": "clinic", "password": "clinic-pass-123"},
+            )
+
+            image_file = _image_file()
+            files = [("files", image_file), ("files", image_file)]
+            response = client.post(
+                "/api/count/batch?threshold_offset=17&min_contrast=23",
+                files=files,
+                headers={"Idempotency-Key": "request-api-batch-0001"},
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["batch_id"] == "request-api-batch-0001"
+            assert payload["succeeded"] == 2
+            assert payload["failed"] == 0
+            assert len(payload["results"]) == 2
+            assert len(payload["errors"]) == 0
+
+            first_count = payload["results"][0]["result"]["count"]
+            second_count = payload["results"][1]["result"]["count"]
+            assert first_count > 0
+            assert second_count > 0
+            assert payload["total_count"] == first_count + second_count
+            assert payload["total_charged_fen"] == (first_count + second_count) * 10
+            assert payload["balance_fen"] == 2_000 - payload["total_charged_fen"]
+
+            replay = client.post(
+                "/api/count/batch?threshold_offset=17&min_contrast=23",
+                files=files,
+                headers={"Idempotency-Key": "request-api-batch-0001"},
+            )
+            assert replay.status_code == 200
+            replay_payload = replay.json()
+            assert replay_payload["total_count"] == payload["total_count"]
+            assert replay_payload["total_charged_fen"] == payload["total_charged_fen"]
+            assert database.get_account(user["id"])["balance_fen"] == 2_000 - payload["total_charged_fen"]
+
+
+def test_batch_with_invalid_image_continues_and_reports_error() -> None:
+    with TemporaryDirectory() as directory:
+        database, _, _ = _configured_database(directory)
+        with patch.object(main_module, "database", database):
+            client = TestClient(main_module.app)
+            client.post(
+                "/api/auth/login",
+                json={"username": "clinic", "password": "clinic-pass-123"},
+            )
+
+            image_file = _image_file()
+            files = [
+                ("files", image_file),
+                ("files", ("invalid.jpg", b"not-an-image", "image/jpeg")),
+            ]
+            response = client.post(
+                "/api/count/batch?threshold_offset=17&min_contrast=23",
+                files=files,
+                headers={"Idempotency-Key": "request-api-batch-mixed-0001"},
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["succeeded"] == 1
+            assert payload["failed"] == 1
+            assert len(payload["results"]) == 1
+            assert len(payload["errors"]) == 1
+            assert payload["errors"][0]["index"] == 1
+            assert payload["errors"][0]["filename"] == "invalid.jpg"
+
+
+def test_batch_insufficient_balance_stops_and_reports_remaining() -> None:
+    with TemporaryDirectory() as directory:
+        database, admin, _ = _configured_database(directory)
+        limited = database.create_account(
+            admin["id"], "batchlimited", "批量余额不足", "limited-pass-123", 100
+        )
+        database.adjust_balance(admin["id"], limited["id"], 100, "测试充值")
+        with patch.object(main_module, "database", database):
+            client = TestClient(main_module.app)
+            client.post(
+                "/api/auth/login",
+                json={"username": "batchlimited", "password": "limited-pass-123"},
+            )
+
+            image_file = _image_file()
+            files = [("files", image_file), ("files", image_file), ("files", image_file)]
+            response = client.post(
+                "/api/count/batch?threshold_offset=17&min_contrast=23",
+                files=files,
+                headers={"Idempotency-Key": "request-api-batch-insufficient-01"},
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["succeeded"] >= 0
+            assert payload["failed"] >= 1
+            assert any("余额不足" in err["error"] for err in payload["errors"])
+            assert database.get_account(limited["id"])["balance_fen"] == 100 - payload["total_charged_fen"]
+
+
+def test_batch_exceeds_max_size_rejected() -> None:
+    with TemporaryDirectory() as directory:
+        database, _, _ = _configured_database(directory)
+        oversized_settings = replace(main_module.settings, max_batch_size=2)
+        with (
+            patch.object(main_module, "database", database),
+            patch.object(main_module, "settings", oversized_settings),
+        ):
+            client = TestClient(main_module.app)
+            client.post(
+                "/api/auth/login",
+                json={"username": "clinic", "password": "clinic-pass-123"},
+            )
+
+            image_file = _image_file()
+            files = [("files", image_file), ("files", image_file), ("files", image_file)]
+            response = client.post(
+                "/api/count/batch?threshold_offset=17&min_contrast=23",
+                files=files,
+                headers={"Idempotency-Key": "request-api-batch-oversize-001"},
+            )
+            assert response.status_code == 413
+
+
+def test_batch_requires_authentication() -> None:
+    with TemporaryDirectory() as directory:
+        database, _, _ = _configured_database(directory)
+        with patch.object(main_module, "database", database):
+            client = TestClient(main_module.app)
+            image_file = _image_file()
+            response = client.post(
+                "/api/count/batch?threshold_offset=17&min_contrast=23",
+                files=[("files", image_file)],
+                headers={"Idempotency-Key": "request-api-batch-unauthorized"},
+            )
+            assert response.status_code == 401
+
+
+def test_batch_empty_files_rejected() -> None:
+    with TemporaryDirectory() as directory:
+        database, _, _ = _configured_database(directory)
+        with patch.object(main_module, "database", database):
+            client = TestClient(main_module.app)
+            client.post(
+                "/api/auth/login",
+                json={"username": "clinic", "password": "clinic-pass-123"},
+            )
+            response = client.post(
+                "/api/count/batch?threshold_offset=17&min_contrast=23",
+                files=[],
+                headers={"Idempotency-Key": "request-api-batch-empty-001"},
+            )
+            assert response.status_code in (400, 422)

@@ -53,6 +53,12 @@
 
     <main class="workspace" id="toolView">
       <aside class="control-panel card">
+        <div class="mode-toggle" id="modeToggle">
+          <button type="button" class="active" data-input-mode="single">单张识别</button>
+          <button type="button" data-input-mode="batch">批量识别</button>
+        </div>
+
+        <div id="singleSection">
         <section>
           <div class="section-heading">
             <span class="step">1</span>
@@ -121,9 +127,90 @@
             <small id="billingDetail">0 根 · 余额 ¥0.00</small>
           </div>
         </section>
+        </div>
+
+        <div id="batchSection" hidden>
+        <section>
+          <div class="section-heading">
+            <span class="step">1</span>
+            <div><h2>选择多张图片</h2><p>批量选择或拖入图片</p></div>
+          </div>
+
+          <label class="drop-zone batch-drop-zone" id="batchDropZone" for="batchFileInput">
+            <input id="batchFileInput" type="file" accept="image/jpeg,image/png,image/webp,image/bmp" multiple hidden />
+            <div class="upload-icon" aria-hidden="true">↑</div>
+            <strong>选择或拖入多张图片</strong>
+            <span id="batchLimits">支持 JPG、PNG、WebP、BMP，最多 10 张，最大 20 MB / 张</span>
+          </label>
+
+          <div class="batch-actions" id="batchActions" hidden>
+            <button class="primary-button" id="batchAnalyzeButton" type="button" disabled>
+              <span class="button-label">开始批量识别</span>
+              <span class="spinner" aria-hidden="true"></span>
+            </button>
+            <button class="secondary-button batch-clear-button" id="batchClearButton" type="button">清空队列</button>
+          </div>
+        </section>
+
+        <div class="divider"></div>
+
+        <section>
+          <div class="section-heading">
+            <span class="step">2</span>
+            <div><h2>识别参数</h2><p>浅色、干净背景效果更佳</p></div>
+          </div>
+
+          <div class="field-group">
+            <div class="field-label">
+              <label for="batchSensitivity">识别灵敏度</label>
+              <output id="batchSensitivityValue">标准</output>
+            </div>
+            <input id="batchSensitivity" type="range" min="-20" max="20" value="0" step="1" />
+            <div class="range-labels"><span>更严格</span><span>更灵敏</span></div>
+          </div>
+
+          <div class="field-group">
+            <div class="field-label">
+              <label for="batchContrast">最低局部对比度</label>
+              <output id="batchContrastValue">35</output>
+            </div>
+            <input id="batchContrast" type="range" min="5" max="100" value="35" step="1" />
+            <div class="range-labels"><span>保留浅目标</span><span>过滤污点</span></div>
+          </div>
+
+          <label class="switch-row">
+            <span><strong>忽略边缘目标</strong><small>不统计接触图片边缘的残缺目标</small></span>
+            <input id="batchExcludeBorder" type="checkbox" />
+            <i></i>
+          </label>
+
+          <div class="billing-rule"><span>自动识别结果计费</span><strong id="batchCurrentUnitPrice">¥0.00 / 根</strong></div>
+          <p class="error-message" id="batchErrorMessage" role="alert"></p>
+          <div class="batch-progress" id="batchProgress" hidden>
+            <div class="batch-progress-bar"><div class="batch-progress-fill" id="batchProgressFill"></div></div>
+            <span id="batchProgressText">0 / 0</span>
+          </div>
+          <div class="batch-summary" id="batchSummary" hidden>
+            <div><span>总数量</span><strong id="batchTotalCount">0</strong></div>
+            <div><span>总扣费</span><strong id="batchTotalCharge">¥0.00</strong></div>
+            <div><span>当前余额</span><strong id="batchBalance">¥0.00</strong></div>
+          </div>
+          <div class="batch-export" id="batchExport" hidden>
+            <button class="secondary-button" id="batchDownloadJson" type="button">导出全部 JSON</button>
+          </div>
+        </section>
+        </div>
       </aside>
 
       <section class="result-panel">
+        <div class="batch-queue-card card" id="batchQueueCard" hidden>
+          <div class="batch-queue-header">
+            <div><h2>批量队列</h2><p>点击已完成的图片查看详情</p></div>
+            <span id="batchQueueCount">0 项</span>
+          </div>
+          <div class="batch-queue-list" id="batchQueueList"></div>
+        </div>
+
         <div class="empty-state card" id="emptyState">
           <div class="empty-visual" aria-hidden="true">
             <div class="scan-line"></div>

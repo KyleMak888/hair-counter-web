@@ -45,6 +45,7 @@ class Settings:
     max_image_side: int = _env_int("MAX_IMAGE_SIDE", 6000)
     max_processing_concurrency: int = _env_int("MAX_PROCESSING_CONCURRENCY", 2)
     request_timeout_seconds: float = _env_float("REQUEST_TIMEOUT_SECONDS", 45.0)
+    max_batch_size: int = _env_int("MAX_BATCH_SIZE", 10)
     database_path: str = os.getenv("DATABASE_PATH", "/tmp/hair-counter.db")
     session_ttl_seconds: int = _env_int("SESSION_TTL_SECONDS", 7 * 24 * 60 * 60)
     secure_cookies: bool = _env_bool("SECURE_COOKIES", False)

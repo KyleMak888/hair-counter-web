@@ -18,6 +18,7 @@ OpenCV 计数算法 + SQLite 账户账务
 - 浏览器端统一 EXIF 方向；
 - 超大图片自动缩小到服务端限制；
 - OpenCV 自动识别和计数；
+- 批量上传多张图片，逐张识别和计费；
 - 自动估算毛发簇中的平行毛发数量；
 - 管理员创建机构账号、设置独立单价并手工充值；
 - 按服务端自动识别根数从预付余额扣费；
@@ -152,6 +153,42 @@ curl -X POST \
 
 `confidence` 是依据目标面积和局部对比度计算的启发式评分，`split_confidence` 是簇内数量的启发式评分，二者都不是机器学习概率。总数为所有 `strand_count` 之和。金额字段统一使用整数“分”。余额不足返回 `402`，不扣款也不返回识别结果。
 
+### 批量图片计数
+
+```http
+POST /api/count/batch
+Content-Type: multipart/form-data
+```
+
+查询参数与单张计数相同。请求体包含多个 `files` 字段，最多 `MAX_BATCH_SIZE`（默认 10）张图片。每张图片独立计费和幂等缓存，单张失败不影响其余图片。余额不足时停止处理剩余图片。
+
+```bash
+curl -X POST \
+  "http://127.0.0.1:8080/api/count/batch?threshold_offset=0&min_contrast=35" \
+  -b cookies.txt \
+  -H "Idempotency-Key: batch-20260714-0001" \
+  -F "files=@image1.jpg" \
+  -F "files=@image2.jpg"
+```
+
+响应示例：
+
+```json
+{
+  "batch_id": "batch-20260714-0001",
+  "total_count": 106,
+  "total_charged_fen": 1060,
+  "balance_fen": 8940,
+  "succeeded": 2,
+  "failed": 0,
+  "results": [
+    { "index": 0, "filename": "image1.jpg", "result": { "count": 53, "..." : "..." } },
+    { "index": 1, "filename": "image2.jpg", "result": { "count": 53, "..." : "..." } }
+  ],
+  "errors": []
+}
+```
+
 ### 账户与管理接口
 
 | 方法 | 路径 | 权限 | 用途 |
@@ -177,6 +214,7 @@ curl -X POST \
 - 单 IP 同时最多 2 个 API 连接；
 - 后端处理并发默认 2；
 - 单次处理超时 45 秒；
+- 批量处理最多 10 张图片/次；
 - 图片全程在内存中处理，不落盘；
 - 密码使用 PBKDF2-SHA256 加盐哈希；会话随机令牌仅以 SHA-256 摘要保存；
 - 账号停用和密码重置会使原有会话失效；

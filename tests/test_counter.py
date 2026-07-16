@@ -163,3 +163,4 @@ def test_health_reports_frontend_limits() -> None:
     assert response.max_upload_bytes > 0
     assert response.max_image_pixels > 0
     assert response.max_image_side > 0
+    assert response.max_batch_size > 0
