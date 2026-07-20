@@ -4,5 +4,6 @@ COPY deploy/nginx.conf /etc/nginx/nginx.conf
 COPY frontend/index.html /usr/share/nginx/html/index.html
 COPY frontend/app.js /usr/share/nginx/html/app.js
 COPY frontend/zip.js /usr/share/nginx/html/zip.js
+COPY frontend/xlsx.js /usr/share/nginx/html/xlsx.js
 COPY frontend/styles.css /usr/share/nginx/html/styles.css
 EXPOSE 80

@@ -1007,6 +1007,7 @@ function clearBatch() {
   if (state.inputMode === "batch") applyViewerState();
   $("#batchProgress").hidden = true;
   $("#batchActions").hidden = true;
+  $("#batchExportMenu").open = false;
   setBatchExportStatus("");
   clearBatchError();
   renderBatchQueue();
@@ -1207,30 +1208,63 @@ function updateBatchSummary() {
   $("#batchBalance").textContent = allSvip || isSvip() ? "无限使用" : formatMoney(state.me?.balance_fen);
 }
 
-function exportBatchJson() {
+function createBatchExportSnapshot() {
   saveActiveBatchViewer();
-  const completed = state.batchQueue.filter((item) => item.response);
-  if (!completed.length) return;
-  const payload = {
-    batch_id: state.batchId,
-    total_count: completed.reduce((sum, item) => sum + totalStrands(batchResultItems(item)), 0),
+  return {
+    batchId: state.batchId,
+    balanceFen: state.me?.balance_fen,
+    items: state.batchQueue.map((item, queueIndex) => {
+      const resultItems = item.response ? normalizedItems(batchResultItems(item)).map(cloneItem) : [];
+      return {
+        queueIndex,
+        sourceFilename: item.sourceFile?.name || `image-${queueIndex + 1}`,
+        status: item.status,
+        error: item.error || "",
+        dirty: Boolean(item.dirty),
+        image: item.image,
+        response: item.response ? {
+          image_width: item.response.image_width,
+          image_height: item.response.image_height,
+          processing_ms: item.response.processing_ms,
+          billing: item.response.billing ? { ...item.response.billing } : item.response.billing,
+        } : null,
+        resultItems,
+        count: item.response ? totalStrands(resultItems) : null,
+      };
+    }),
+  };
+}
+
+function batchJsonPayload(snapshot) {
+  const completed = snapshot.items.filter((item) => item.response);
+  return {
+    batch_id: snapshot.batchId,
+    total_count: completed.reduce((sum, item) => sum + item.count, 0),
     total_charged_fen: completed.reduce((sum, item) => sum + (item.response.billing?.charged_amount_fen || 0), 0),
-    balance_fen: state.me?.balance_fen,
+    balance_fen: snapshot.balanceFen,
     items: completed.map((item, index) => ({
       index,
-      filename: item.sourceFile.name,
+      filename: item.sourceFilename,
       result: {
-        count: totalStrands(batchResultItems(item)),
+        count: item.count,
         image_width: item.response.image_width,
         image_height: item.response.image_height,
         processing_ms: item.response.processing_ms,
         billing: item.response.billing,
         manually_edited: item.dirty,
-        items: normalizedItems(batchResultItems(item)),
+        items: item.resultItems,
       },
     })),
   };
+}
+
+function exportBatchJson() {
+  const snapshot = createBatchExportSnapshot();
+  if (!snapshot.items.some((item) => item.response)) return;
+  const payload = batchJsonPayload(snapshot);
   downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }), "hair-count-batch-result.json");
+  $("#batchExportMenu").open = false;
+  setBatchExportStatus("已导出批量 JSON");
 }
 
 function canvasBlob(sourceCanvas, type) {
@@ -1239,8 +1273,8 @@ function canvasBlob(sourceCanvas, type) {
   });
 }
 
-function annotatedFilename(item, index, usedNames) {
-  const original = item.sourceFile?.name || `image-${index + 1}`;
+function annotatedFilename(originalFilename, index, usedNames) {
+  const original = originalFilename || `image-${index + 1}`;
   const rawStem = original.replace(/\.[^.]+$/, "") || `image-${index + 1}`;
   const safeStem = rawStem
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
@@ -1262,49 +1296,125 @@ function setBatchExportStatus(message, error = false) {
   status.classList.toggle("error", error);
 }
 
-function setBatchExportBusy(busy) {
+function setBatchExportBusy(busy, kind = "") {
   state.batchExporting = busy;
+  const packageButton = $("#batchDownloadPackage");
   const imageButton = $("#batchDownloadImages");
-  imageButton.disabled = busy;
-  imageButton.textContent = busy ? "正在打包…" : "下载全部标注图";
-  $("#batchDownloadJson").disabled = busy;
+  const hasResults = state.batchQueue.some((item) => item.status === "done" && item.response);
+  packageButton.disabled = busy || !hasResults;
+  packageButton.classList.toggle("loading", busy && kind === "package");
+  packageButton.querySelector(".button-label").textContent = busy && kind === "package" ? "正在生成结果包…" : "下载完整结果包";
+  imageButton.disabled = busy || !hasResults;
+  imageButton.textContent = busy && kind === "images" ? "正在打包…" : "下载全部标注图";
+  $("#batchDownloadJson").disabled = busy || !hasResults;
   $("#batchClearButton").disabled = busy;
+  const menu = $("#batchExportMenu");
+  menu.open = false;
+  menu.classList.toggle("busy", busy);
+  menu.setAttribute("aria-disabled", String(busy));
   batchAnalyzeButton.disabled = busy || state.batchProcessing
     || !state.batchQueue.some((item) => item.status === "pending" || item.status === "error");
   renderBatchQueue();
 }
 
+async function createBatchAnnotatedFiles(snapshot, folder = "", onProgress = null) {
+  const completed = snapshot.items.filter((item) => item.status === "done" && item.response && item.image);
+  const entries = [];
+  const pathsByQueueIndex = new Map();
+  const usedNames = new Set();
+
+  for (const [index, item] of completed.entries()) {
+    if (onProgress) onProgress(index + 1, completed.length);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const exportCanvas = document.createElement("canvas");
+    drawAnnotatedImage(exportCanvas, item.image, item.resultItems);
+    const imageBlob = await canvasBlob(exportCanvas, "image/png");
+    const filename = annotatedFilename(item.sourceFilename, index, usedNames);
+    const path = `${folder}${filename}`;
+    entries.push({
+      name: path,
+      data: new Uint8Array(await imageBlob.arrayBuffer()),
+    });
+    pathsByQueueIndex.set(item.queueIndex, path);
+    exportCanvas.width = 0;
+    exportCanvas.height = 0;
+  }
+
+  return { entries, pathsByQueueIndex };
+}
+
+function batchSpreadsheetRows(snapshot, pathsByQueueIndex) {
+  return snapshot.items.map((item) => {
+    const succeeded = item.status === "done" && Boolean(item.response);
+    const failed = item.status === "error";
+    return {
+      index: item.queueIndex + 1,
+      originalFilename: item.sourceFilename,
+      annotatedPath: succeeded ? (pathsByQueueIndex.get(item.queueIndex) || "") : "",
+      status: succeeded ? "成功" : failed ? "失败" : "未处理",
+      finalCount: succeeded ? item.count : null,
+      manuallyEdited: succeeded ? (item.dirty ? "是" : "否") : "",
+      error: failed ? (item.error || "识别失败") : "",
+    };
+  });
+}
+
+async function exportBatchPackage() {
+  if (state.batchExporting) return;
+  const snapshot = createBatchExportSnapshot();
+  const succeeded = snapshot.items.filter((item) => item.status === "done" && item.response && item.image);
+  if (!succeeded.length) return;
+
+  setBatchExportBusy(true, "package");
+  setBatchExportStatus("正在准备完整结果包…");
+
+  try {
+    if (!globalThis.ZipArchive?.create) throw new Error("ZIP 组件未加载，请刷新页面后重试");
+    if (!globalThis.XlsxWorkbook?.create) throw new Error("Excel 组件未加载，请刷新页面后重试");
+
+    const images = await createBatchAnnotatedFiles(snapshot, "标注图/", (current, total) => {
+      setBatchExportStatus(`正在生成标注图 ${current} / ${total}`);
+    });
+
+    setBatchExportStatus("正在生成 Excel…");
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const workbook = globalThis.XlsxWorkbook.create(batchSpreadsheetRows(snapshot, images.pathsByQueueIndex));
+    const json = JSON.stringify(batchJsonPayload(snapshot), null, 2);
+
+    setBatchExportStatus("正在打包完整结果…");
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const archive = globalThis.ZipArchive.create([
+      { name: "批量结果.xlsx", data: new Uint8Array(await workbook.arrayBuffer()) },
+      { name: "批量结果.json", data: new TextEncoder().encode(json) },
+      ...images.entries,
+    ]);
+    downloadBlob(archive, "hair-count-batch-results.zip");
+    setBatchExportStatus(`完整结果包已生成，共记录 ${snapshot.items.length} 张图片`);
+  } catch (error) {
+    setBatchExportStatus(error.message || "完整结果包生成失败", true);
+  } finally {
+    setBatchExportBusy(false);
+  }
+}
+
 async function exportBatchImages() {
   if (state.batchExporting) return;
-  saveActiveBatchViewer();
-  const completed = state.batchQueue.filter((item) => item.status === "done" && item.response && item.image);
+  const snapshot = createBatchExportSnapshot();
+  const completed = snapshot.items.filter((item) => item.status === "done" && item.response && item.image);
   if (!completed.length) return;
 
-  setBatchExportBusy(true);
+  setBatchExportBusy(true, "images");
   setBatchExportStatus(`准备打包 ${completed.length} 张标注图…`);
 
   try {
     if (!globalThis.ZipArchive?.create) throw new Error("ZIP 组件未加载，请刷新页面后重试");
-    const entries = [];
-    const usedNames = new Set();
-
-    for (const [index, item] of completed.entries()) {
-      setBatchExportStatus(`正在生成标注图 ${index + 1} / ${completed.length}`);
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      const exportCanvas = document.createElement("canvas");
-      drawAnnotatedImage(exportCanvas, item.image, batchResultItems(item));
-      const imageBlob = await canvasBlob(exportCanvas, "image/png");
-      entries.push({
-        name: annotatedFilename(item, index, usedNames),
-        data: new Uint8Array(await imageBlob.arrayBuffer()),
-      });
-      exportCanvas.width = 0;
-      exportCanvas.height = 0;
-    }
+    const images = await createBatchAnnotatedFiles(snapshot, "", (current, total) => {
+      setBatchExportStatus(`正在生成标注图 ${current} / ${total}`);
+    });
 
     setBatchExportStatus("正在生成 ZIP 文件…");
     await new Promise((resolve) => requestAnimationFrame(resolve));
-    const archive = globalThis.ZipArchive.create(entries);
+    const archive = globalThis.ZipArchive.create(images.entries);
     downloadBlob(archive, "hair-count-annotated-images.zip");
     setBatchExportStatus(`已打包 ${completed.length} 张标注图`);
   } catch (error) {
@@ -1356,6 +1466,11 @@ $("#batchQueueList").addEventListener("click", (event) => {
 });
 $("#batchDownloadJson").addEventListener("click", exportBatchJson);
 $("#batchDownloadImages").addEventListener("click", exportBatchImages);
+$("#batchDownloadPackage").addEventListener("click", exportBatchPackage);
+document.addEventListener("click", (event) => {
+  const menu = $("#batchExportMenu");
+  if (menu.open && !menu.contains(event.target)) menu.open = false;
+});
 
 $("#loginForm").addEventListener("submit", login);
 $("#logoutButton").addEventListener("click", logout);
