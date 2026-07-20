@@ -7,7 +7,7 @@
   <meta name="description" content="毛发与深色小目标计数工具" />
   <title>毛发计数器</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="/styles.css?v=1.1.0" />
+  <link rel="stylesheet" href="/styles.css?v=1.2.0" />
 </head>
 <body>
   <main class="auth-screen" id="authScreen" hidden>
@@ -201,7 +201,11 @@
             <div><span id="batchBalanceLabel">当前余额</span><strong id="batchBalance">¥0.00</strong></div>
           </div>
           <div class="batch-export" id="batchExport" hidden>
-            <button class="secondary-button" id="batchDownloadJson" type="button">导出全部 JSON</button>
+            <div class="batch-export-actions">
+              <button class="secondary-button" id="batchDownloadJson" type="button">导出全部 JSON</button>
+              <button class="secondary-button" id="batchDownloadImages" type="button">下载全部标注图</button>
+            </div>
+            <p id="batchExportStatus" role="status" aria-live="polite"></p>
           </div>
         </section>
         </div>
@@ -377,6 +381,7 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=1.1.0" defer></script>
+  <script src="/zip.js?v=1.2.0" defer></script>
+  <script src="/app.js?v=1.2.0" defer></script>
 </body>
 </html>

@@ -28,6 +28,7 @@ const state = {
   batchQueue: [],
   batchAdding: false,
   batchProcessing: false,
+  batchExporting: false,
   batchId: null,
   batchViewIndex: -1,
   singleViewerState: null,
@@ -43,7 +44,6 @@ const analyzeButton = $("#analyzeButton");
 const sensitivity = $("#sensitivity");
 const contrast = $("#contrast");
 const canvas = $("#resultCanvas");
-const ctx = canvas.getContext("2d");
 
 function formatMoney(fen) {
   return `¥${(Number(fen || 0) / 100).toFixed(2)}`;
@@ -555,51 +555,57 @@ function totalStrands(items) {
   return items.reduce((total, item) => total + strandCount(item), 0);
 }
 
-function normalizedItems() {
-  return state.items.map((item, index) => ({ ...item, id: index + 1 }));
+function normalizedItems(items = state.items) {
+  return items.map((item, index) => ({ ...item, id: index + 1 }));
 }
 
-function drawResults() {
-  if (!state.image) return;
-  canvas.width = state.image.naturalWidth;
-  canvas.height = state.image.naturalHeight;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(state.image, 0, 0, canvas.width, canvas.height);
+function drawAnnotatedImage(targetCanvas, image, sourceItems) {
+  const targetContext = targetCanvas.getContext("2d");
+  const canvasWidth = image.naturalWidth || image.width;
+  const canvasHeight = image.naturalHeight || image.height;
+  targetCanvas.width = canvasWidth;
+  targetCanvas.height = canvasHeight;
+  targetContext.clearRect(0, 0, canvasWidth, canvasHeight);
+  targetContext.drawImage(image, 0, 0, canvasWidth, canvasHeight);
 
-  const items = normalizedItems();
-  const scale = Math.max(0.8, Math.min(canvas.width, canvas.height) / 360);
+  const items = normalizedItems(sourceItems);
+  const scale = Math.max(0.8, Math.min(canvasWidth, canvasHeight) / 360);
   const lineWidth = Math.max(1.5, 1.7 * scale);
   const radius = Math.max(2.5, 3 * scale);
-  const fontSize = Math.max(11, Math.min(22, canvas.width / 45));
-  ctx.lineWidth = lineWidth;
-  ctx.font = `700 ${fontSize}px Inter, Arial, sans-serif`;
-  ctx.textBaseline = "middle";
+  const fontSize = Math.max(11, Math.min(22, canvasWidth / 45));
+  targetContext.lineWidth = lineWidth;
+  targetContext.font = `700 ${fontSize}px Inter, Arial, sans-serif`;
+  targetContext.textBaseline = "middle";
 
   for (const item of items) {
     const [x, y, width, height] = item.bbox;
     const [centerX, centerY] = item.center;
     const color = item.manual ? "#8b5cf6" : item.partial ? "#f59e0b" : "#16a34a";
-    ctx.strokeStyle = color;
-    ctx.setLineDash(item.manual ? [5 * scale, 3 * scale] : []);
-    ctx.strokeRect(x - lineWidth / 2, y - lineWidth / 2, width + lineWidth, height + lineWidth);
-    ctx.setLineDash([]);
-    ctx.fillStyle = item.manual ? "#8b5cf6" : "#ef4444";
-    ctx.beginPath(); ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); ctx.fill();
+    targetContext.strokeStyle = color;
+    targetContext.setLineDash(item.manual ? [5 * scale, 3 * scale] : []);
+    targetContext.strokeRect(x - lineWidth / 2, y - lineWidth / 2, width + lineWidth, height + lineWidth);
+    targetContext.setLineDash([]);
+    targetContext.fillStyle = item.manual ? "#8b5cf6" : "#ef4444";
+    targetContext.beginPath(); targetContext.arc(centerX, centerY, radius, 0, Math.PI * 2); targetContext.fill();
 
     const count = strandCount(item);
     const text = count > 1 ? `${item.id} ×${count}` : String(item.id);
-    const metrics = ctx.measureText(text);
+    const metrics = targetContext.measureText(text);
     const padX = 4 * scale;
     const boxWidth = metrics.width + padX * 2;
     const boxHeight = fontSize + 5 * scale;
-    const labelX = Math.max(1, Math.min(canvas.width - boxWidth - 1, x));
+    const labelX = Math.max(1, Math.min(canvasWidth - boxWidth - 1, x));
     let labelY = y - boxHeight - 3 * scale;
-    if (labelY < 1) labelY = Math.min(canvas.height - boxHeight - 1, y + height + 3 * scale);
-    ctx.fillStyle = "rgba(255,255,255,.94)"; ctx.fillRect(labelX, labelY, boxWidth, boxHeight);
-    ctx.strokeStyle = color; ctx.lineWidth = Math.max(1, scale); ctx.strokeRect(labelX, labelY, boxWidth, boxHeight);
-    ctx.fillStyle = "#1d4ed8"; ctx.fillText(text, labelX + padX, labelY + boxHeight / 2 + .5);
+    if (labelY < 1) labelY = Math.min(canvasHeight - boxHeight - 1, y + height + 3 * scale);
+    targetContext.fillStyle = "rgba(255,255,255,.94)"; targetContext.fillRect(labelX, labelY, boxWidth, boxHeight);
+    targetContext.strokeStyle = color; targetContext.lineWidth = Math.max(1, scale); targetContext.strokeRect(labelX, labelY, boxWidth, boxHeight);
+    targetContext.fillStyle = "#1d4ed8"; targetContext.fillText(text, labelX + padX, labelY + boxHeight / 2 + .5);
   }
+}
 
+function drawResults() {
+  if (!state.image) return;
+  drawAnnotatedImage(canvas, state.image, state.items);
 }
 
 function updateMetrics() {
@@ -632,7 +638,16 @@ function updateTable() {
   }
 }
 
-function renderAll() { drawResults(); updateMetrics(); updateTable(); }
+function renderAll() {
+  saveActiveBatchViewer();
+  drawResults();
+  updateMetrics();
+  updateTable();
+  if (state.inputMode === "batch") {
+    updateBatchSummary();
+    renderBatchQueue();
+  }
+}
 
 function setEditMode(mode) {
   state.editMode = mode;
@@ -853,15 +868,36 @@ function applyViewerState(viewer = null) {
   Object.assign(state, next);
 }
 
+function ensureBatchResultState(item) {
+  if (!item?.response) return item;
+  if (!item.autoItems) item.autoItems = item.response.items.map((entry) => ({ ...cloneItem(entry), manual: false }));
+  if (!item.items) item.items = item.autoItems.map(cloneItem);
+  if (typeof item.dirty !== "boolean") item.dirty = false;
+  return item;
+}
+
+function batchResultItems(item) {
+  return ensureBatchResultState(item)?.items || [];
+}
+
+function saveActiveBatchViewer() {
+  if (state.inputMode !== "batch" || state.batchViewIndex < 0) return;
+  const item = state.batchQueue[state.batchViewIndex];
+  if (!item?.response || state.response !== item.response) return;
+  item.autoItems = state.autoItems.map(cloneItem);
+  item.items = state.items.map(cloneItem);
+  item.dirty = state.dirty;
+}
+
 function batchViewerState(item) {
-  const autoItems = item.response.items.map((entry) => ({ ...entry, manual: false }));
+  ensureBatchResultState(item);
   return {
     image: item.image,
     response: item.response,
-    autoItems,
-    items: autoItems.map(cloneItem),
+    autoItems: item.autoItems.map(cloneItem),
+    items: item.items.map(cloneItem),
     editMode: "view",
-    dirty: false,
+    dirty: item.dirty,
   };
 }
 
@@ -873,6 +909,7 @@ function setInputMode(mode) {
     const selected = state.batchQueue[state.batchViewIndex];
     applyViewerState(selected?.response ? batchViewerState(selected) : null);
   } else if (previousMode !== mode && mode === "single") {
+    saveActiveBatchViewer();
     applyViewerState(state.singleViewerState);
     state.singleViewerState = null;
   }
@@ -942,7 +979,7 @@ async function addBatchFiles(fileList) {
 }
 
 function removeBatchItem(index) {
-  if (state.batchProcessing) return;
+  if (state.batchProcessing || state.batchExporting) return;
   const item = state.batchQueue[index];
   if (item?.objectUrl) URL.revokeObjectURL(item.objectUrl);
   state.batchQueue.splice(index, 1);
@@ -962,7 +999,7 @@ function removeBatchItem(index) {
 }
 
 function clearBatch() {
-  if (state.batchProcessing) return;
+  if (state.batchProcessing || state.batchExporting) return;
   for (const item of state.batchQueue) { if (item.objectUrl) URL.revokeObjectURL(item.objectUrl); }
   state.batchQueue = [];
   state.batchViewIndex = -1;
@@ -970,6 +1007,7 @@ function clearBatch() {
   if (state.inputMode === "batch") applyViewerState();
   $("#batchProgress").hidden = true;
   $("#batchActions").hidden = true;
+  setBatchExportStatus("");
   clearBatchError();
   renderBatchQueue();
   updateBatchSummary();
@@ -983,7 +1021,7 @@ function renderBatchQueue() {
   const list = $("#batchQueueList");
   $("#batchQueueCount").textContent = `${state.batchQueue.length} 项`;
   list.innerHTML = state.batchQueue.map((item, index) => {
-    const count = item.response ? totalStrands(item.response.items.map((i) => ({ ...i, manual: false }))) : 0;
+    const count = item.response ? totalStrands(batchResultItems(item)) : 0;
     const statusMap = {
       pending: ["等待", "pending"],
       processing: ["处理中", "processing"],
@@ -1003,7 +1041,7 @@ function renderBatchQueue() {
         ${errorMsg}
       </div>
       <span class="batch-item-status status-tag ${statusClass}">${statusText}</span>
-      ${state.batchProcessing ? "" : `<button type="button" class="icon-button batch-item-remove" data-batch-remove="${index}" title="移除">×</button>`}
+      ${state.batchProcessing || state.batchExporting ? "" : `<button type="button" class="icon-button batch-item-remove" data-batch-remove="${index}" title="移除">×</button>`}
     </div>`;
   }).join("");
 }
@@ -1011,6 +1049,7 @@ function renderBatchQueue() {
 function viewBatchItem(index) {
   const item = state.batchQueue[index];
   if (!item || !item.response) return;
+  saveActiveBatchViewer();
   state.batchViewIndex = index;
   applyViewerState(batchViewerState(item));
 
@@ -1035,6 +1074,7 @@ async function analyzeBatch() {
   batchAnalyzeButton.classList.add("loading");
   batchAnalyzeButton.querySelector(".button-label").textContent = "批量识别中…";
   clearBatchError();
+  setBatchExportStatus("");
 
   if (!state.batchId) state.batchId = requestId();
 
@@ -1115,6 +1155,7 @@ async function analyzeBatch() {
 
     item.status = "done";
     item.response = payload;
+    ensureBatchResultState(item);
     applyBillingState(payload.billing);
     processed += 1;
     renderBatchQueue();
@@ -1150,7 +1191,7 @@ function updateBatchSummary() {
   $("#batchSummary").classList.remove("svip");
   if (!completed.length) return;
   const totalCount = completed.reduce(
-    (sum, item) => sum + totalStrands(item.response.items.map((entry) => ({ ...entry, manual: false }))),
+    (sum, item) => sum + totalStrands(batchResultItems(item)),
     0,
   );
   const totalCharged = completed.reduce(
@@ -1167,27 +1208,110 @@ function updateBatchSummary() {
 }
 
 function exportBatchJson() {
+  saveActiveBatchViewer();
   const completed = state.batchQueue.filter((item) => item.response);
   if (!completed.length) return;
   const payload = {
     batch_id: state.batchId,
-    total_count: completed.reduce((sum, item) => sum + totalStrands(item.response.items.map((i) => ({ ...i, manual: false }))), 0),
+    total_count: completed.reduce((sum, item) => sum + totalStrands(batchResultItems(item)), 0),
     total_charged_fen: completed.reduce((sum, item) => sum + (item.response.billing?.charged_amount_fen || 0), 0),
-    balance_fen: state.me.balance_fen,
+    balance_fen: state.me?.balance_fen,
     items: completed.map((item, index) => ({
       index,
       filename: item.sourceFile.name,
       result: {
-        count: totalStrands(item.response.items.map((i) => ({ ...i, manual: false }))),
+        count: totalStrands(batchResultItems(item)),
         image_width: item.response.image_width,
         image_height: item.response.image_height,
         processing_ms: item.response.processing_ms,
         billing: item.response.billing,
-        items: item.response.items,
+        manually_edited: item.dirty,
+        items: normalizedItems(batchResultItems(item)),
       },
     })),
   };
   downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }), "hair-count-batch-result.json");
+}
+
+function canvasBlob(sourceCanvas, type) {
+  return new Promise((resolve, reject) => {
+    sourceCanvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("标注图生成失败")), type);
+  });
+}
+
+function annotatedFilename(item, index, usedNames) {
+  const original = item.sourceFile?.name || `image-${index + 1}`;
+  const rawStem = original.replace(/\.[^.]+$/, "") || `image-${index + 1}`;
+  const safeStem = rawStem
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 120) || `image-${index + 1}`;
+  let suffix = 1;
+  let filename = `${safeStem}-annotated.png`;
+  while (usedNames.has(filename.toLowerCase())) {
+    suffix += 1;
+    filename = `${safeStem}-annotated-${suffix}.png`;
+  }
+  usedNames.add(filename.toLowerCase());
+  return filename;
+}
+
+function setBatchExportStatus(message, error = false) {
+  const status = $("#batchExportStatus");
+  status.textContent = message;
+  status.classList.toggle("error", error);
+}
+
+function setBatchExportBusy(busy) {
+  state.batchExporting = busy;
+  const imageButton = $("#batchDownloadImages");
+  imageButton.disabled = busy;
+  imageButton.textContent = busy ? "正在打包…" : "下载全部标注图";
+  $("#batchDownloadJson").disabled = busy;
+  $("#batchClearButton").disabled = busy;
+  batchAnalyzeButton.disabled = busy || state.batchProcessing
+    || !state.batchQueue.some((item) => item.status === "pending" || item.status === "error");
+  renderBatchQueue();
+}
+
+async function exportBatchImages() {
+  if (state.batchExporting) return;
+  saveActiveBatchViewer();
+  const completed = state.batchQueue.filter((item) => item.status === "done" && item.response && item.image);
+  if (!completed.length) return;
+
+  setBatchExportBusy(true);
+  setBatchExportStatus(`准备打包 ${completed.length} 张标注图…`);
+
+  try {
+    if (!globalThis.ZipArchive?.create) throw new Error("ZIP 组件未加载，请刷新页面后重试");
+    const entries = [];
+    const usedNames = new Set();
+
+    for (const [index, item] of completed.entries()) {
+      setBatchExportStatus(`正在生成标注图 ${index + 1} / ${completed.length}`);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const exportCanvas = document.createElement("canvas");
+      drawAnnotatedImage(exportCanvas, item.image, batchResultItems(item));
+      const imageBlob = await canvasBlob(exportCanvas, "image/png");
+      entries.push({
+        name: annotatedFilename(item, index, usedNames),
+        data: new Uint8Array(await imageBlob.arrayBuffer()),
+      });
+      exportCanvas.width = 0;
+      exportCanvas.height = 0;
+    }
+
+    setBatchExportStatus("正在生成 ZIP 文件…");
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const archive = globalThis.ZipArchive.create(entries);
+    downloadBlob(archive, "hair-count-annotated-images.zip");
+    setBatchExportStatus(`已打包 ${completed.length} 张标注图`);
+  } catch (error) {
+    setBatchExportStatus(error.message || "批量标注图下载失败", true);
+  } finally {
+    setBatchExportBusy(false);
+  }
 }
 
 fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
@@ -1231,6 +1355,7 @@ $("#batchQueueList").addEventListener("click", (event) => {
   if (viewItem) viewBatchItem(Number(viewItem.dataset.batchView));
 });
 $("#batchDownloadJson").addEventListener("click", exportBatchJson);
+$("#batchDownloadImages").addEventListener("click", exportBatchImages);
 
 $("#loginForm").addEventListener("submit", login);
 $("#logoutButton").addEventListener("click", logout);

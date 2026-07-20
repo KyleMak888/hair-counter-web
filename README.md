@@ -27,7 +27,7 @@ OpenCV 计数算法 + SQLite 账户账务
 - 管理员查看余额、累计根数、消费和最近流水；
 - Canvas 绘制编号和目标框；
 - 人工补点、删除和恢复；
-- 下载修正后的 PNG 和 JSON；
+- 下载修正后的 PNG 和 JSON，并将批量标注图打包为 ZIP；
 - 上传文件大小、像素数量和格式校验；
 - Nginx 请求限速、并发限制和安全响应头；
 - Docker Compose 一键部署。
@@ -295,6 +295,7 @@ uvicorn app.main:app --reload --port 8000
 pip install -r backend/requirements-dev.txt
 pytest -q
 node --check frontend/app.js
+node --check frontend/zip.js
 docker compose config --quiet
 ```
 
