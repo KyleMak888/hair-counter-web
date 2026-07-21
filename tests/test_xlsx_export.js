@@ -36,6 +36,8 @@ test("creates an Excel-compatible batch summary with typed counts", async () => 
         originalFilename: "样本<&>.jpg",
         annotatedPath: "标注图/样本___-annotated.png",
         status: "成功",
+        automaticCount: 20,
+        manualAdjustment: -2,
         finalCount: 18,
         manuallyEdited: "是",
         error: "",
@@ -45,6 +47,8 @@ test("creates an Excel-compatible batch summary with typed counts", async () => 
         originalFilename: "失败图片.png",
         annotatedPath: "",
         status: "失败",
+        automaticCount: null,
+        manualAdjustment: null,
         finalCount: null,
         manuallyEdited: "",
         error: "余额不足\u0001，已跳过",
@@ -106,12 +110,16 @@ test("creates an Excel-compatible batch summary with typed counts", async () => 
   const workbookXml = decoder.decode(entries.get("xl/workbook.xml"));
   const sheetXml = decoder.decode(entries.get("xl/worksheets/sheet1.xml"));
   const markerSheetXml = decoder.decode(entries.get("xl/worksheets/sheet2.xml"));
+  const stylesXml = decoder.decode(entries.get("xl/styles.xml"));
   assert.match(workbookXml, /sheet name="逐图结果"/);
   assert.match(workbookXml, /sheet name="标记明细"/);
   assert.match(sheetXml, /<pane ySplit="1"[^>]+state="frozen"\/>/);
-  assert.match(sheetXml, /<autoFilter ref="A1:G3"\/>/);
+  assert.match(sheetXml, /<autoFilter ref="A1:I3"\/>/);
   assert.match(sheetXml, /<c r="A2" s="4" t="n"><v>1<\/v><\/c>/);
-  assert.match(sheetXml, /<c r="E2" s="2" t="n"><v>18<\/v><\/c>/);
+  assert.match(sheetXml, /<c r="E2" s="2" t="n"><v>20<\/v><\/c>/);
+  assert.match(sheetXml, /<c r="F2" s="8" t="n"><v>-2<\/v><\/c>/);
+  assert.match(sheetXml, /<c r="G2" s="2" t="n"><v>18<\/v><\/c>/);
+  assert.match(stylesXml, /numFmtId="164" formatCode="\+#,##0;-#,##0;0"/);
   assert.match(sheetXml, /样本&lt;&amp;&gt;\.jpg/);
   assert.match(sheetXml, /余额不足，已跳过/);
   assert.doesNotMatch(sheetXml, /\u0001/);

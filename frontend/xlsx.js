@@ -3,7 +3,7 @@
 
   const MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   const encoder = new TextEncoder();
-  const summaryHeaders = ["序号", "原图文件名", "标注图路径", "处理状态", "最终数量", "是否人工修正", "失败原因"];
+  const summaryHeaders = ["序号", "原图文件名", "标注图路径", "处理状态", "自动识别数量", "人工修正数量", "最终数量", "是否人工修正", "失败原因"];
   const markerHeaders = [
     "图片序号", "原图文件名", "标注图路径", "原始簇编号", "最终标注编号", "簇内序号",
     "中心X(px)", "中心Y(px)", "边界框X(px)", "边界框Y(px)", "边界框宽(px)", "边界框高(px)",
@@ -55,16 +55,18 @@
         textCell(`B${rowNumber}`, row.originalFilename),
         textCell(`C${rowNumber}`, row.annotatedPath),
         textCell(`D${rowNumber}`, row.status),
-        optionalNumberCell(`E${rowNumber}`, row.finalCount),
-        textCell(`F${rowNumber}`, row.manuallyEdited),
-        textCell(`G${rowNumber}`, row.error, 3),
+        optionalNumberCell(`E${rowNumber}`, row.automaticCount),
+        optionalNumberCell(`F${rowNumber}`, row.manualAdjustment, 8),
+        optionalNumberCell(`G${rowNumber}`, row.finalCount),
+        textCell(`H${rowNumber}`, row.manuallyEdited),
+        textCell(`I${rowNumber}`, row.error, 3),
       ].join("");
       return `<row r="${rowNumber}" ht="22" customHeight="1">${cells}</row>`;
     }).join("");
 
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <dimension ref="A1:G${rowCount}"/>
+  <dimension ref="A1:I${rowCount}"/>
   <sheetViews>
     <sheetView showGridLines="0" workbookViewId="0">
       <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
@@ -77,15 +79,15 @@
     <col min="2" max="2" width="34" customWidth="1"/>
     <col min="3" max="3" width="44" customWidth="1"/>
     <col min="4" max="4" width="13" customWidth="1"/>
-    <col min="5" max="5" width="14" customWidth="1"/>
-    <col min="6" max="6" width="16" customWidth="1"/>
-    <col min="7" max="7" width="48" customWidth="1"/>
+    <col min="5" max="7" width="16" customWidth="1"/>
+    <col min="8" max="8" width="16" customWidth="1"/>
+    <col min="9" max="9" width="48" customWidth="1"/>
   </cols>
   <sheetData>
     <row r="1" ht="28" customHeight="1">${headerCells(summaryHeaders)}</row>
     ${dataRows}
   </sheetData>
-  <autoFilter ref="A1:G${rowCount}"/>
+  <autoFilter ref="A1:I${rowCount}"/>
   <pageMargins left="0.4" right="0.4" top="0.6" bottom="0.6" header="0.3" footer="0.3"/>
 </worksheet>`;
   }
@@ -211,6 +213,7 @@
         name: "xl/styles.xml",
         data: encoder.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="1"><numFmt numFmtId="164" formatCode="+#,##0;-#,##0;0"/></numFmts>
   <fonts count="2">
     <font><sz val="11"/><color theme="1"/><name val="Microsoft YaHei"/><family val="2"/></font>
     <font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Microsoft YaHei"/><family val="2"/></font>
@@ -225,7 +228,7 @@
     <border><left/><right/><top/><bottom style="thin"><color rgb="FFD7DFEB"/></bottom><diagonal/></border>
   </borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="8">
+  <cellXfs count="9">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment vertical="center"/></xf>
     <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
     <xf numFmtId="3" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
@@ -234,6 +237,7 @@
     <xf numFmtId="2" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
     <xf numFmtId="10" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
     <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
   <tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>

@@ -14,6 +14,10 @@
     return Number.isFinite(score) ? Math.round(score * 1_000_000) / 1_000_000 : null;
   }
 
+  function totalStrands(items) {
+    return (items || []).reduce((total, item) => total + strandCount(item), 0);
+  }
+
   function hasNetManualChanges(initialItems, finalItems) {
     const initial = automaticItems(initialItems);
     const final = finalItems || [];
@@ -111,7 +115,26 @@
     return rows;
   }
 
-  const api = Object.freeze({ createMarkerRows, hasNetManualChanges, markerRowsForItem });
+  function createSummaryRows(snapshot, pathsByQueueIndex) {
+    return snapshot.items.map((item) => {
+      const succeeded = item.status === "done" && Boolean(item.response);
+      const failed = item.status === "error";
+      const automaticCount = succeeded ? totalStrands(item.initialItems) : null;
+      return {
+        index: item.queueIndex + 1,
+        originalFilename: item.sourceFilename,
+        annotatedPath: succeeded ? (pathsByQueueIndex.get(item.queueIndex) || "") : "",
+        status: succeeded ? "成功" : failed ? "失败" : "未处理",
+        automaticCount,
+        manualAdjustment: succeeded ? item.count - automaticCount : null,
+        finalCount: succeeded ? item.count : null,
+        manuallyEdited: succeeded ? (item.dirty ? "是" : "否") : "",
+        error: failed ? (item.error || "识别失败") : "",
+      };
+    });
+  }
+
+  const api = Object.freeze({ createMarkerRows, createSummaryRows, hasNetManualChanges, markerRowsForItem });
   root.BatchExportData = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(typeof globalThis === "object" ? globalThis : this);

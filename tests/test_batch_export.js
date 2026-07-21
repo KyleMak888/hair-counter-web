@@ -26,6 +26,64 @@ test("detects net manual changes instead of transient edit history", () => {
   assert.equal(BatchExportData.hasNetManualChanges(initial, restored), false);
 });
 
+test("creates per-image summary counts that reconcile automatic, manual, and final totals", () => {
+  const snapshot = {
+    items: [
+      {
+        queueIndex: 0,
+        sourceFilename: "已修正.jpg",
+        status: "done",
+        response: {},
+        initialItems: [item(1, 3), item(2, 2)],
+        count: 4,
+        dirty: true,
+      },
+      {
+        queueIndex: 1,
+        sourceFilename: "失败.jpg",
+        status: "error",
+        response: null,
+        initialItems: [],
+        count: null,
+        dirty: false,
+        error: "识别超时",
+      },
+      {
+        queueIndex: 2,
+        sourceFilename: "等待.jpg",
+        status: "pending",
+        response: null,
+        initialItems: [],
+        count: null,
+        dirty: false,
+      },
+    ],
+  };
+
+  const rows = BatchExportData.createSummaryRows(snapshot, new Map([[0, "标注图/已修正-annotated.png"]]));
+  assert.deepEqual(rows[0], {
+    index: 1,
+    originalFilename: "已修正.jpg",
+    annotatedPath: "标注图/已修正-annotated.png",
+    status: "成功",
+    automaticCount: 5,
+    manualAdjustment: -1,
+    finalCount: 4,
+    manuallyEdited: "是",
+    error: "",
+  });
+  assert.deepEqual(rows.slice(1).map((row) => ({
+    status: row.status,
+    automaticCount: row.automaticCount,
+    manualAdjustment: row.manualAdjustment,
+    finalCount: row.finalCount,
+    error: row.error,
+  })), [
+    { status: "失败", automaticCount: null, manualAdjustment: null, finalCount: null, error: "识别超时" },
+    { status: "未处理", automaticCount: null, manualAdjustment: null, finalCount: null, error: "" },
+  ]);
+});
+
 test("expands automatic corrections and manual points to one row per logical strand", () => {
   const initialItems = [
     item(7, 2, { center: [72.25, 24.5], confidence: 0.9, splitConfidence: 0.8 }),

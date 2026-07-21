@@ -1355,22 +1355,6 @@ async function createBatchAnnotatedFiles(snapshot, folder = "", onProgress = nul
   return { entries, pathsByQueueIndex };
 }
 
-function batchSpreadsheetRows(snapshot, pathsByQueueIndex) {
-  return snapshot.items.map((item) => {
-    const succeeded = item.status === "done" && Boolean(item.response);
-    const failed = item.status === "error";
-    return {
-      index: item.queueIndex + 1,
-      originalFilename: item.sourceFilename,
-      annotatedPath: succeeded ? (pathsByQueueIndex.get(item.queueIndex) || "") : "",
-      status: succeeded ? "成功" : failed ? "失败" : "未处理",
-      finalCount: succeeded ? item.count : null,
-      manuallyEdited: succeeded ? (item.dirty ? "是" : "否") : "",
-      error: failed ? (item.error || "识别失败") : "",
-    };
-  });
-}
-
 async function exportBatchPackage() {
   if (state.batchExporting) return;
   const snapshot = createBatchExportSnapshot();
@@ -1391,7 +1375,7 @@ async function exportBatchPackage() {
     setBatchExportStatus("正在生成 Excel…");
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const workbook = globalThis.XlsxWorkbook.create({
-      summaryRows: batchSpreadsheetRows(snapshot, images.pathsByQueueIndex),
+      summaryRows: globalThis.BatchExportData.createSummaryRows(snapshot, images.pathsByQueueIndex),
       markerRows: globalThis.BatchExportData.createMarkerRows(snapshot, images.pathsByQueueIndex),
     });
     const json = JSON.stringify(batchJsonPayload(snapshot), null, 2);
