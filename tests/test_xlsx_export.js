@@ -29,26 +29,64 @@ async function zipEntries(blob) {
 }
 
 test("creates an Excel-compatible batch summary with typed counts", async () => {
-  const workbook = XlsxWorkbook.create([
-    {
-      index: 1,
-      originalFilename: "样本<&>.jpg",
-      annotatedPath: "标注图/样本___-annotated.png",
-      status: "成功",
-      finalCount: 18,
-      manuallyEdited: "是",
-      error: "",
-    },
-    {
-      index: 2,
-      originalFilename: "失败图片.png",
-      annotatedPath: "",
-      status: "失败",
-      finalCount: null,
-      manuallyEdited: "",
-      error: "余额不足\u0001，已跳过",
-    },
-  ]);
+  const workbook = XlsxWorkbook.create({
+    summaryRows: [
+      {
+        index: 1,
+        originalFilename: "样本<&>.jpg",
+        annotatedPath: "标注图/样本___-annotated.png",
+        status: "成功",
+        finalCount: 18,
+        manuallyEdited: "是",
+        error: "",
+      },
+      {
+        index: 2,
+        originalFilename: "失败图片.png",
+        annotatedPath: "",
+        status: "失败",
+        finalCount: null,
+        manuallyEdited: "",
+        error: "余额不足\u0001，已跳过",
+      },
+    ],
+    markerRows: [
+      {
+        imageIndex: 1,
+        originalFilename: "样本<&>.jpg",
+        annotatedPath: "标注图/样本___-annotated.png",
+        originalClusterId: 3,
+        finalAnnotationId: 2,
+        strandIndex: 1,
+        centerX: 42.25,
+        centerY: 88.5,
+        bboxX: 39,
+        bboxY: 84,
+        bboxWidth: 8,
+        bboxHeight: 9,
+        correction: "自动保留",
+        finalCounted: "是",
+        confidence: 0.875,
+      },
+      {
+        imageIndex: 1,
+        originalFilename: "样本<&>.jpg",
+        annotatedPath: "标注图/样本___-annotated.png",
+        originalClusterId: 4,
+        finalAnnotationId: null,
+        strandIndex: 1,
+        centerX: 102,
+        centerY: 72,
+        bboxX: 98,
+        bboxY: 68,
+        bboxWidth: 8,
+        bboxHeight: 8,
+        correction: "人工删除",
+        finalCounted: "否",
+        confidence: 0.64,
+      },
+    ],
+  });
 
   assert.equal(workbook.type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   const entries = await zipEntries(workbook);
@@ -61,12 +99,15 @@ test("creates an Excel-compatible batch summary with typed counts", async () => 
     "xl/styles.xml",
     "xl/workbook.xml",
     "xl/worksheets/sheet1.xml",
+    "xl/worksheets/sheet2.xml",
   ].sort());
 
   const decoder = new TextDecoder();
   const workbookXml = decoder.decode(entries.get("xl/workbook.xml"));
   const sheetXml = decoder.decode(entries.get("xl/worksheets/sheet1.xml"));
+  const markerSheetXml = decoder.decode(entries.get("xl/worksheets/sheet2.xml"));
   assert.match(workbookXml, /sheet name="逐图结果"/);
+  assert.match(workbookXml, /sheet name="标记明细"/);
   assert.match(sheetXml, /<pane ySplit="1"[^>]+state="frozen"\/>/);
   assert.match(sheetXml, /<autoFilter ref="A1:G3"\/>/);
   assert.match(sheetXml, /<c r="A2" s="4" t="n"><v>1<\/v><\/c>/);
@@ -74,13 +115,19 @@ test("creates an Excel-compatible batch summary with typed counts", async () => 
   assert.match(sheetXml, /样本&lt;&amp;&gt;\.jpg/);
   assert.match(sheetXml, /余额不足，已跳过/);
   assert.doesNotMatch(sheetXml, /\u0001/);
+  assert.match(markerSheetXml, /<pane xSplit="2" ySplit="1"[^>]+state="frozen"\/>/);
+  assert.match(markerSheetXml, /<autoFilter ref="A1:O3"\/>/);
+  assert.match(markerSheetXml, /<c r="G2" s="5" t="n"><v>42\.25<\/v><\/c>/);
+  assert.match(markerSheetXml, /<c r="O2" s="6" t="n"><v>0\.875<\/v><\/c>/);
+  assert.match(markerSheetXml, /<c r="E3" s="4" t="inlineStr">/);
+  assert.match(markerSheetXml, /人工删除/);
   if (process.env.XLSX_FIXTURE_PATH) {
     await fs.writeFile(process.env.XLSX_FIXTURE_PATH, new Uint8Array(await workbook.arrayBuffer()));
   }
 });
 
 test("supports the complete package directory structure and Unicode paths", async () => {
-  const workbook = XlsxWorkbook.create([]);
+  const workbook = XlsxWorkbook.create({ summaryRows: [], markerRows: [] });
   const archive = ZipArchive.create([
     { name: "批量结果.xlsx", data: new Uint8Array(await workbook.arrayBuffer()) },
     { name: "批量结果.json", data: new TextEncoder().encode("{}") },

@@ -555,6 +555,10 @@ function totalStrands(items) {
   return items.reduce((total, item) => total + strandCount(item), 0);
 }
 
+function refreshDirtyState() {
+  state.dirty = globalThis.BatchExportData.hasNetManualChanges(state.autoItems, state.items);
+}
+
 function normalizedItems(items = state.items) {
   return items.map((item, index) => ({ ...item, id: index + 1 }));
 }
@@ -688,7 +692,7 @@ function handleCanvasClick(event) {
       const item = state.items[index];
       if (strandCount(item) > 1) item.strand_count = strandCount(item) - 1;
       else state.items.splice(index, 1);
-      state.dirty = true;
+      refreshDirtyState();
       renderAll();
     }
     return;
@@ -697,7 +701,7 @@ function handleCanvasClick(event) {
   const x = Math.max(0, Math.min(canvas.width - side, Math.round(point.x - side / 2)));
   const y = Math.max(0, Math.min(canvas.height - side, Math.round(point.y - side / 2)));
   state.items.push({ id: state.items.length + 1, bbox: [x, y, side, side], center: [Number(point.x.toFixed(2)), Number(point.y.toFixed(2))], area: side * side, contrast: 0, confidence: 1, partial: x === 0 || y === 0 || x + side >= canvas.width || y + side >= canvas.height, strand_count: 1, split_confidence: 1, manual: true });
-  state.dirty = true; renderAll();
+  refreshDirtyState(); renderAll();
 }
 
 function restoreAutoItems() { state.items = state.autoItems.map(cloneItem); state.dirty = false; renderAll(); }
@@ -872,7 +876,7 @@ function ensureBatchResultState(item) {
   if (!item?.response) return item;
   if (!item.autoItems) item.autoItems = item.response.items.map((entry) => ({ ...cloneItem(entry), manual: false }));
   if (!item.items) item.items = item.autoItems.map(cloneItem);
-  if (typeof item.dirty !== "boolean") item.dirty = false;
+  item.dirty = globalThis.BatchExportData.hasNetManualChanges(item.autoItems, item.items);
   return item;
 }
 
@@ -1214,13 +1218,19 @@ function createBatchExportSnapshot() {
     batchId: state.batchId,
     balanceFen: state.me?.balance_fen,
     items: state.batchQueue.map((item, queueIndex) => {
-      const resultItems = item.response ? normalizedItems(batchResultItems(item)).map(cloneItem) : [];
+      ensureBatchResultState(item);
+      const initialItems = item.response ? item.autoItems.map(cloneItem) : [];
+      const finalItems = item.response ? batchResultItems(item).map(cloneItem) : [];
+      const resultItems = item.response ? normalizedItems(finalItems).map(cloneItem) : [];
+      const dirty = item.response
+        ? globalThis.BatchExportData.hasNetManualChanges(initialItems, finalItems)
+        : false;
       return {
         queueIndex,
         sourceFilename: item.sourceFile?.name || `image-${queueIndex + 1}`,
         status: item.status,
         error: item.error || "",
-        dirty: Boolean(item.dirty),
+        dirty,
         image: item.image,
         response: item.response ? {
           image_width: item.response.image_width,
@@ -1228,6 +1238,8 @@ function createBatchExportSnapshot() {
           processing_ms: item.response.processing_ms,
           billing: item.response.billing ? { ...item.response.billing } : item.response.billing,
         } : null,
+        initialItems,
+        finalItems,
         resultItems,
         count: item.response ? totalStrands(resultItems) : null,
       };
@@ -1378,7 +1390,10 @@ async function exportBatchPackage() {
 
     setBatchExportStatus("正在生成 Excel…");
     await new Promise((resolve) => requestAnimationFrame(resolve));
-    const workbook = globalThis.XlsxWorkbook.create(batchSpreadsheetRows(snapshot, images.pathsByQueueIndex));
+    const workbook = globalThis.XlsxWorkbook.create({
+      summaryRows: batchSpreadsheetRows(snapshot, images.pathsByQueueIndex),
+      markerRows: globalThis.BatchExportData.createMarkerRows(snapshot, images.pathsByQueueIndex),
+    });
     const json = JSON.stringify(batchJsonPayload(snapshot), null, 2);
 
     setBatchExportStatus("正在打包完整结果…");
@@ -1437,7 +1452,7 @@ $("#itemsTable").addEventListener("click", (event) => {
   if (!item) return;
   if (button.dataset.strandAction === "increase") item.strand_count = strandCount(item) + 1;
   if (button.dataset.strandAction === "decrease" && strandCount(item) > 1) item.strand_count = strandCount(item) - 1;
-  state.dirty = true;
+  refreshDirtyState();
   renderAll();
 });
 $("#restoreButton").addEventListener("click", restoreAutoItems);
