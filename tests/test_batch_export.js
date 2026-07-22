@@ -35,6 +35,7 @@ test("creates per-image summary counts that reconcile automatic, manual, and fin
         status: "done",
         response: {},
         initialItems: [item(1, 3), item(2, 2)],
+        finalItems: [item(1, 2), item(2, 2)],
         count: 4,
         dirty: true,
       },
@@ -67,7 +68,10 @@ test("creates per-image summary counts that reconcile automatic, manual, and fin
     annotatedPath: "标注图/已修正-annotated.png",
     status: "成功",
     automaticCount: 5,
-    manualAdjustment: -1,
+    manualIncreaseCount: 0,
+    manualDeletionCount: 1,
+    manualPointCount: 0,
+    manualNetAdjustment: -1,
     finalCount: 4,
     manuallyEdited: "是",
     error: "",
@@ -75,13 +79,56 @@ test("creates per-image summary counts that reconcile automatic, manual, and fin
   assert.deepEqual(rows.slice(1).map((row) => ({
     status: row.status,
     automaticCount: row.automaticCount,
-    manualAdjustment: row.manualAdjustment,
+    manualIncreaseCount: row.manualIncreaseCount,
+    manualDeletionCount: row.manualDeletionCount,
+    manualPointCount: row.manualPointCount,
+    manualNetAdjustment: row.manualNetAdjustment,
     finalCount: row.finalCount,
     error: row.error,
   })), [
-    { status: "失败", automaticCount: null, manualAdjustment: null, finalCount: null, error: "识别超时" },
-    { status: "未处理", automaticCount: null, manualAdjustment: null, finalCount: null, error: "" },
+    {
+      status: "失败", automaticCount: null, manualIncreaseCount: null, manualDeletionCount: null,
+      manualPointCount: null, manualNetAdjustment: null, finalCount: null, error: "识别超时",
+    },
+    {
+      status: "未处理", automaticCount: null, manualIncreaseCount: null, manualDeletionCount: null,
+      manualPointCount: null, manualNetAdjustment: null, finalCount: null, error: "",
+    },
   ]);
+});
+
+test("keeps split correction counts when additions and deletions offset", () => {
+  const snapshot = {
+    items: [{
+      queueIndex: 0,
+      sourceFilename: "抵消修正.jpg",
+      status: "done",
+      response: {},
+      initialItems: [item(7, 2), item(8, 3), item(9, 1)],
+      finalItems: [item(7, 3), item(8, 1), item(2, 2, { manual: true })],
+      count: 6,
+      dirty: true,
+    }],
+  };
+
+  const [row] = BatchExportData.createSummaryRows(snapshot, new Map());
+  assert.deepEqual({
+    automaticCount: row.automaticCount,
+    manualIncreaseCount: row.manualIncreaseCount,
+    manualDeletionCount: row.manualDeletionCount,
+    manualPointCount: row.manualPointCount,
+    manualNetAdjustment: row.manualNetAdjustment,
+    finalCount: row.finalCount,
+    manuallyEdited: row.manuallyEdited,
+  }, {
+    automaticCount: 6,
+    manualIncreaseCount: 2,
+    manualDeletionCount: 3,
+    manualPointCount: 1,
+    manualNetAdjustment: 0,
+    finalCount: 6,
+    manuallyEdited: "是",
+  });
 });
 
 test("expands automatic corrections and manual points to one row per logical strand", () => {
@@ -137,7 +184,7 @@ test("expands automatic corrections and manual points to one row per logical str
   assert.equal(rows[7].annotatedPath, "标注图/样本-annotated.png");
 });
 
-test("rejects marker details that do not reconcile to the final image count", () => {
+test("rejects exports that do not reconcile to the final image count", () => {
   const snapshot = {
     items: [{
       queueIndex: 0,
@@ -152,5 +199,9 @@ test("rejects marker details that do not reconcile to the final image count", ()
   assert.throws(
     () => BatchExportData.createMarkerRows(snapshot, new Map()),
     /标记明细与最终数量不一致/,
+  );
+  assert.throws(
+    () => BatchExportData.createSummaryRows(snapshot, new Map()),
+    /修正汇总与最终数量不一致/,
   );
 });

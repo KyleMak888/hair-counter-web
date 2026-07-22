@@ -120,13 +120,34 @@
       const succeeded = item.status === "done" && Boolean(item.response);
       const failed = item.status === "error";
       const automaticCount = succeeded ? totalStrands(item.initialItems) : null;
+      const markerRows = succeeded
+        ? markerRowsForItem(item, pathsByQueueIndex.get(item.queueIndex) || "")
+        : [];
+      const manualIncreaseCount = succeeded
+        ? markerRows.filter((row) => row.correction === "人工增加数量" && row.finalCounted === "是").length
+        : null;
+      const manualDeletionCount = succeeded
+        ? markerRows.filter((row) => row.correction === "人工删除").length
+        : null;
+      const manualPointCount = succeeded
+        ? markerRows.filter((row) => row.correction === "人工补点" && row.finalCounted === "是").length
+        : null;
+      const manualNetAdjustment = succeeded
+        ? manualIncreaseCount + manualPointCount - manualDeletionCount
+        : null;
+      if (succeeded && automaticCount + manualNetAdjustment !== item.count) {
+        throw new Error(`第 ${item.queueIndex + 1} 张图片的修正汇总与最终数量不一致`);
+      }
       return {
         index: item.queueIndex + 1,
         originalFilename: item.sourceFilename,
         annotatedPath: succeeded ? (pathsByQueueIndex.get(item.queueIndex) || "") : "",
         status: succeeded ? "成功" : failed ? "失败" : "未处理",
         automaticCount,
-        manualAdjustment: succeeded ? item.count - automaticCount : null,
+        manualIncreaseCount,
+        manualDeletionCount,
+        manualPointCount,
+        manualNetAdjustment,
         finalCount: succeeded ? item.count : null,
         manuallyEdited: succeeded ? (item.dirty ? "是" : "否") : "",
         error: failed ? (item.error || "识别失败") : "",
