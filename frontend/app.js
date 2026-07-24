@@ -32,6 +32,7 @@ const state = {
   batchId: null,
   batchViewIndex: -1,
   singleViewerState: null,
+  imageView: "annotated",
 };
 
 const fileInput = $("#fileInput");
@@ -44,6 +45,7 @@ const analyzeButton = $("#analyzeButton");
 const sensitivity = $("#sensitivity");
 const contrast = $("#contrast");
 const canvas = $("#resultCanvas");
+const imageViewToggle = $("#imageViewToggle");
 
 function formatMoney(fen) {
   return `¥${(Number(fen || 0) / 100).toFixed(2)}`;
@@ -428,6 +430,8 @@ async function selectFile(file) {
     state.autoItems = [];
     state.dirty = false;
     state.pendingRequestId = null;
+    state.imageView = "annotated";
+    updateImageViewToggle();
 
     fileThumb.src = state.objectUrl;
     fileName.textContent = file.name;
@@ -451,7 +455,8 @@ async function selectFile(file) {
 function resetFile() {
   state.requestVersion += 1;
   if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
-  Object.assign(state, { sourceFile: null, uploadFile: null, objectUrl: null, image: null, response: null, autoItems: [], items: [], dirty: false, pendingRequestId: null, singleViewerState: null });
+  Object.assign(state, { sourceFile: null, uploadFile: null, objectUrl: null, image: null, response: null, autoItems: [], items: [], dirty: false, pendingRequestId: null, singleViewerState: null, imageView: "annotated" });
+  updateImageViewToggle();
   fileInput.value = "";
   fileRow.hidden = true;
   dropZone.hidden = false;
@@ -517,6 +522,8 @@ async function analyze() {
     state.autoItems = payload.items.map((item) => ({ ...item, manual: false }));
     state.items = state.autoItems.map(cloneItem);
     state.dirty = false;
+    state.imageView = "annotated";
+    updateImageViewToggle();
     setEditMode("view");
     renderAll();
     const svip = payload.billing.plan === "svip";
@@ -563,10 +570,25 @@ function normalizedItems(items = state.items) {
   return items.map((item, index) => ({ ...item, id: index + 1 }));
 }
 
+function imageDimensions(image) {
+  return {
+    width: image.naturalWidth || image.width,
+    height: image.naturalHeight || image.height,
+  };
+}
+
+function drawOriginalImage(targetCanvas, image) {
+  const targetContext = targetCanvas.getContext("2d");
+  const { width, height } = imageDimensions(image);
+  targetCanvas.width = width;
+  targetCanvas.height = height;
+  targetContext.clearRect(0, 0, width, height);
+  targetContext.drawImage(image, 0, 0, width, height);
+}
+
 function drawAnnotatedImage(targetCanvas, image, sourceItems) {
   const targetContext = targetCanvas.getContext("2d");
-  const canvasWidth = image.naturalWidth || image.width;
-  const canvasHeight = image.naturalHeight || image.height;
+  const { width: canvasWidth, height: canvasHeight } = imageDimensions(image);
   targetCanvas.width = canvasWidth;
   targetCanvas.height = canvasHeight;
   targetContext.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -601,7 +623,7 @@ function drawAnnotatedImage(targetCanvas, image, sourceItems) {
     const labelX = Math.max(1, Math.min(canvasWidth - boxWidth - 1, x));
     let labelY = y - boxHeight - 3 * scale;
     if (labelY < 1) labelY = Math.min(canvasHeight - boxHeight - 1, y + height + 3 * scale);
-    targetContext.fillStyle = "rgba(255,255,255,.94)"; targetContext.fillRect(labelX, labelY, boxWidth, boxHeight);
+    targetContext.fillStyle = "rgba(255,255,255,.58)"; targetContext.fillRect(labelX, labelY, boxWidth, boxHeight);
     targetContext.strokeStyle = color; targetContext.lineWidth = Math.max(1, scale); targetContext.strokeRect(labelX, labelY, boxWidth, boxHeight);
     targetContext.fillStyle = "#1d4ed8"; targetContext.fillText(text, labelX + padX, labelY + boxHeight / 2 + .5);
   }
@@ -609,7 +631,25 @@ function drawAnnotatedImage(targetCanvas, image, sourceItems) {
 
 function drawResults() {
   if (!state.image) return;
-  drawAnnotatedImage(canvas, state.image, state.items);
+  if (state.imageView === "original") drawOriginalImage(canvas, state.image);
+  else drawAnnotatedImage(canvas, state.image, state.items);
+}
+
+function updateImageViewToggle() {
+  if (!imageViewToggle) return;
+  const original = state.imageView === "original";
+  imageViewToggle.textContent = original ? "显示标注图" : "显示原图";
+  imageViewToggle.classList.toggle("active", original);
+  imageViewToggle.setAttribute("aria-pressed", String(original));
+  imageViewToggle.setAttribute("aria-label", original ? "显示计数标注图" : "显示原图");
+}
+
+function setImageView(mode) {
+  if (mode !== "annotated" && mode !== "original") return;
+  state.imageView = mode;
+  if (mode === "original" && state.editMode !== "view") setEditMode("view");
+  updateImageViewToggle();
+  renderAll();
 }
 
 function updateMetrics() {
@@ -655,7 +695,12 @@ function renderAll() {
 
 function setEditMode(mode) {
   state.editMode = mode;
-  $$(".toolbar-button[data-mode]").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
+  const editingDisabled = state.imageView === "original";
+  $$(".toolbar-button[data-mode]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.mode === mode);
+    button.disabled = editingDisabled && button.dataset.mode !== "view";
+  });
+  $("#restoreButton").disabled = editingDisabled;
   const wrap = $("#canvasWrap");
   wrap.classList.toggle("mode-add", mode === "add");
   wrap.classList.toggle("mode-remove", mode === "remove");
@@ -719,7 +764,16 @@ function exportJson() {
   downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }), "hair-count-result.json");
 }
 
-function exportImage() { canvas.toBlob((blob) => blob && downloadBlob(blob, "hair-count-annotated.png"), "image/png"); }
+function exportImage() {
+  if (!state.image) return;
+  const exportCanvas = document.createElement("canvas");
+  drawAnnotatedImage(exportCanvas, state.image, state.items);
+  exportCanvas.toBlob((blob) => {
+    if (blob) downloadBlob(blob, "hair-count-annotated.png");
+    exportCanvas.width = 0;
+    exportCanvas.height = 0;
+  }, "image/png");
+}
 
 function setFormBusy(form, busy) {
   form.querySelectorAll("button").forEach((button) => { button.disabled = busy; });
@@ -857,6 +911,7 @@ function captureViewerState() {
     items: state.items,
     editMode: state.editMode,
     dirty: state.dirty,
+    imageView: state.imageView,
   };
 }
 
@@ -868,6 +923,7 @@ function applyViewerState(viewer = null) {
     items: [],
     editMode: "view",
     dirty: false,
+    imageView: "annotated",
   };
   Object.assign(state, next);
 }
@@ -876,6 +932,7 @@ function ensureBatchResultState(item) {
   if (!item?.response) return item;
   if (!item.autoItems) item.autoItems = item.response.items.map((entry) => ({ ...cloneItem(entry), manual: false }));
   if (!item.items) item.items = item.autoItems.map(cloneItem);
+  if (!item.imageView) item.imageView = "annotated";
   item.dirty = globalThis.BatchExportData.hasNetManualChanges(item.autoItems, item.items);
   return item;
 }
@@ -891,6 +948,7 @@ function saveActiveBatchViewer() {
   item.autoItems = state.autoItems.map(cloneItem);
   item.items = state.items.map(cloneItem);
   item.dirty = state.dirty;
+  item.imageView = state.imageView;
 }
 
 function batchViewerState(item) {
@@ -902,6 +960,7 @@ function batchViewerState(item) {
     items: item.items.map(cloneItem),
     editMode: "view",
     dirty: item.dirty,
+    imageView: item.imageView || "annotated",
   };
 }
 
@@ -969,6 +1028,7 @@ async function addBatchFiles(fileList) {
         error: null,
         status: "pending",
         requestKey: requestId(),
+        imageView: "annotated",
       });
     } catch (error) {
       showBatchError(`${file.name}: ${error.message || "图片处理失败"}`);
@@ -1429,6 +1489,7 @@ analyzeButton.addEventListener("click", analyze);
 sensitivity.addEventListener("input", () => $("#sensitivityValue").textContent = sensitivityLabel(sensitivity.value));
 contrast.addEventListener("input", () => $("#contrastValue").textContent = contrast.value);
 canvas.addEventListener("click", handleCanvasClick);
+imageViewToggle.addEventListener("click", () => setImageView(state.imageView === "original" ? "annotated" : "original"));
 $("#itemsTable").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-strand-action]");
   if (!button) return;
@@ -1493,5 +1554,7 @@ $("#balanceAdjustmentForm").addEventListener("submit", submitBalanceAdjustment);
 $("#passwordResetForm").addEventListener("submit", submitPasswordReset);
 $$(".dialog-close").forEach((button) => button.addEventListener("click", () => closeDialog(button.closest("dialog"))));
 $$(".plan-selector input[name='plan']").forEach((input) => input.addEventListener("change", () => updatePlanFields(input.form)));
+updateImageViewToggle();
+setEditMode("view");
 
 checkHealth().then(loadSession);
