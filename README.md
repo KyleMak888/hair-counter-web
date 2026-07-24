@@ -17,7 +17,7 @@ OpenCV 计数算法 + SQLite 账户账务
 - 拍照、上传或拖拽图片；
 - 浏览器端统一 EXIF 方向；
 - 超大图片自动缩小到服务端限制；
-- OpenCV 自动识别和计数；
+- OpenCV 增强算法自动识别和计数；
 - 批量上传多张图片，逐张识别和计费；
 - 自动估算毛发簇中的平行毛发数量；
 - 管理员创建机构账号，并在按量计费与 SVIP 买断之间转换；
@@ -101,8 +101,8 @@ Content-Type: multipart/form-data
 
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
-| `threshold_offset` | `0` | 越大越严格，越小越灵敏 |
-| `min_contrast` | `35` | 最低局部对比度 |
+| `threshold_offset` | `-10` | 越大越严格，越小越灵敏 |
+| `min_contrast` | `25` | 最低局部对比度 |
 | `exclude_border` | `false` | 是否排除边缘目标 |
 
 请求必须携带登录 Cookie 和本次操作唯一的 `Idempotency-Key`。同一个账号重复提交同一个 Key 时返回原结果且不再次扣费；重新点击识别会生成新 Key 并重新收费。
@@ -116,7 +116,7 @@ curl -c cookies.txt \
   http://127.0.0.1:8080/api/auth/login
 
 curl -X POST \
-  "http://127.0.0.1:8080/api/count?threshold_offset=0&min_contrast=35&exclude_border=false" \
+  "http://127.0.0.1:8080/api/count?threshold_offset=-10&min_contrast=25&exclude_border=false" \
   -b cookies.txt \
   -H "Idempotency-Key: request-20260714-0001" \
   -F "file=@your-image.jpg"
@@ -168,7 +168,7 @@ Content-Type: multipart/form-data
 
 ```bash
 curl -X POST \
-  "http://127.0.0.1:8080/api/count/batch?threshold_offset=0&min_contrast=35" \
+  "http://127.0.0.1:8080/api/count/batch?threshold_offset=-10&min_contrast=25" \
   -b cookies.txt \
   -H "Idempotency-Key: batch-20260714-0001" \
   -F "files=@image1.jpg" \

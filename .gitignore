@@ -1,2 +1,4 @@
 .playwright-cli/
 output/
+sample-images/
+__pycache__/

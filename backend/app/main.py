@@ -21,7 +21,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 from .config import settings
-from .counter import CounterConfig, count_dark_clusters
+from .counter_enhanced import (
+    EnhancedCounterConfig,
+    count_dark_clusters_enhanced as count_dark_clusters,
+)
 from .database import (
     AccountDisabled,
     AccountNotFound,
@@ -279,8 +282,8 @@ def admin_audit(
 async def count(
     file: UploadFile = File(description="JPG/PNG/WebP/BMP image"),
     exclude_border: bool = Query(False, description="Ignore edge-touching objects"),
-    threshold_offset: int = Query(0, ge=-100, le=100),
-    min_contrast: float = Query(35.0, ge=0.0, le=255.0),
+    threshold_offset: int = Query(-10, ge=-100, le=100),
+    min_contrast: float = Query(25.0, ge=0.0, le=255.0),
     idempotency_key: str = Header(
         ...,
         alias="Idempotency-Key",
@@ -304,7 +307,7 @@ async def count(
     data = await read_upload_limited(file, settings.max_upload_bytes)
     decoded = await run_in_threadpool(decode_and_validate_image, data, settings)
 
-    config = CounterConfig(
+    config = EnhancedCounterConfig(
         exclude_border=exclude_border,
         threshold_offset=threshold_offset,
         min_contrast=min_contrast,
@@ -359,8 +362,8 @@ async def count(
 async def count_batch(
     files: list[UploadFile] = File(description="JPG/PNG/WebP/BMP images"),
     exclude_border: bool = Query(False, description="Ignore edge-touching objects"),
-    threshold_offset: int = Query(0, ge=-100, le=100),
-    min_contrast: float = Query(35.0, ge=0.0, le=255.0),
+    threshold_offset: int = Query(-10, ge=-100, le=100),
+    min_contrast: float = Query(25.0, ge=0.0, le=255.0),
     idempotency_key: str = Header(
         ...,
         alias="Idempotency-Key",
@@ -378,7 +381,7 @@ async def count_batch(
             detail=f"批量处理最多 {settings.max_batch_size} 张图片",
         )
 
-    config = CounterConfig(
+    config = EnhancedCounterConfig(
         exclude_border=exclude_border,
         threshold_offset=threshold_offset,
         min_contrast=min_contrast,

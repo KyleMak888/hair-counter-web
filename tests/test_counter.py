@@ -12,6 +12,10 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.config import Settings  # noqa: E402
 from app.counter import CounterConfig, _component_contrast, count_dark_clusters  # noqa: E402
+from app.counter_enhanced import (  # noqa: E402
+    EnhancedCounterConfig,
+    count_dark_clusters_enhanced,
+)
 from app.image_io import decode_and_validate_image  # noqa: E402
 from app.main import health  # noqa: E402
 from app.schemas import CountResponse  # noqa: E402
@@ -124,6 +128,34 @@ def test_low_resolution_source_counts_marked_clusters() -> None:
             if x <= item.center[0] <= x + width and y <= item.center[1] <= y + height
         )
         assert actual == expected
+
+
+def test_enhanced_defaults_use_balanced_preset() -> None:
+    config = EnhancedCounterConfig()
+    assert config.threshold_offset == -10
+    assert config.min_contrast == 25.0
+    assert config.min_confidence_threshold == 0.4
+    assert config.scale_factors == (0.8, 1.0, 1.2)
+
+
+def test_enhanced_counter_preserves_cluster_split_estimation() -> None:
+    config = EnhancedCounterConfig(
+        threshold_offset=0,
+        min_contrast=35,
+        enable_multiscale=False,
+        use_adaptive_threshold=False,
+        enable_opening=False,
+        use_confidence_filter=False,
+    )
+    expected_counts = {
+        "double": 10,
+        "triple": 11,
+    }
+    for kind, expected in expected_counts.items():
+        result = count_dark_clusters_enhanced(_synthetic_scene(kind), config)
+        assert result.count == expected, kind
+        assert any(item.strand_count > 1 for item in result.items), kind
+        assert result.count == sum(item.strand_count for item in result.items)
 
 
 def test_oversized_image_is_rejected_before_decode() -> None:
