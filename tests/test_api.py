@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 import app.main as main_module  # noqa: E402
+from app.counter import CounterConfig  # noqa: E402
+from app.counter_enhanced import EnhancedCounterConfig  # noqa: E402
 from app.database import Database  # noqa: E402
 
 
@@ -29,6 +31,21 @@ def _configured_database(directory: str) -> tuple[Database, dict, dict]:
 def _image_file() -> tuple[str, bytes, str]:
     path = ROOT / "tests" / "fixtures" / "touching-hairs-source.jpg"
     return path.name, path.read_bytes(), "image/jpeg"
+
+
+def test_counter_selector_defaults_to_legacy_algorithm() -> None:
+    counter, config = main_module._counter_for_request(False, 0, 35)
+    assert counter is main_module.count_dark_clusters
+    assert isinstance(config, CounterConfig)
+
+
+def test_counter_selector_can_use_enhanced_v2() -> None:
+    enhanced_settings = replace(main_module.settings, count_algorithm="enhanced_v2")
+    with patch.object(main_module, "settings", enhanced_settings):
+        counter, config = main_module._counter_for_request(False, 0, 35)
+
+    assert counter is main_module.count_dark_clusters_enhanced_v2
+    assert isinstance(config, EnhancedCounterConfig)
 
 
 def test_authenticated_count_billing_and_idempotent_api() -> None:

@@ -21,9 +21,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 from .config import settings
+from .counter import CounterConfig, count_dark_clusters
 from .counter_enhanced import (
     EnhancedCounterConfig,
-    count_dark_clusters_enhanced as count_dark_clusters,
+    count_dark_clusters_enhanced_v2,
 )
 from .database import (
     AccountDisabled,
@@ -135,6 +136,24 @@ def _database_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, (InvalidBalanceAdjustment, DatabaseError)):
         return HTTPException(status_code=422, detail=str(exc))
     return HTTPException(status_code=500, detail="账户操作失败")
+
+
+def _counter_for_request(
+    exclude_border: bool,
+    threshold_offset: int,
+    min_contrast: float,
+) -> tuple[Any, CounterConfig]:
+    if settings.count_algorithm == "enhanced_v2":
+        return count_dark_clusters_enhanced_v2, EnhancedCounterConfig(
+            exclude_border=exclude_border,
+            threshold_offset=threshold_offset,
+            min_contrast=min_contrast,
+        )
+    return count_dark_clusters, CounterConfig(
+        exclude_border=exclude_border,
+        threshold_offset=threshold_offset,
+        min_contrast=min_contrast,
+    )
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -282,8 +301,8 @@ def admin_audit(
 async def count(
     file: UploadFile = File(description="JPG/PNG/WebP/BMP image"),
     exclude_border: bool = Query(False, description="Ignore edge-touching objects"),
-    threshold_offset: int = Query(-10, ge=-100, le=100),
-    min_contrast: float = Query(25.0, ge=0.0, le=255.0),
+    threshold_offset: int = Query(0, ge=-100, le=100),
+    min_contrast: float = Query(35.0, ge=0.0, le=255.0),
     idempotency_key: str = Header(
         ...,
         alias="Idempotency-Key",
@@ -307,16 +326,16 @@ async def count(
     data = await read_upload_limited(file, settings.max_upload_bytes)
     decoded = await run_in_threadpool(decode_and_validate_image, data, settings)
 
-    config = EnhancedCounterConfig(
-        exclude_border=exclude_border,
-        threshold_offset=threshold_offset,
-        min_contrast=min_contrast,
+    counter, config = _counter_for_request(
+        exclude_border,
+        threshold_offset,
+        min_contrast,
     )
 
     try:
         async with processing_slots:
             result = await asyncio.wait_for(
-                run_in_threadpool(count_dark_clusters, decoded.bgr, config),
+                run_in_threadpool(counter, decoded.bgr, config),
                 timeout=settings.request_timeout_seconds,
             )
     except asyncio.TimeoutError as exc:
@@ -362,8 +381,8 @@ async def count(
 async def count_batch(
     files: list[UploadFile] = File(description="JPG/PNG/WebP/BMP images"),
     exclude_border: bool = Query(False, description="Ignore edge-touching objects"),
-    threshold_offset: int = Query(-10, ge=-100, le=100),
-    min_contrast: float = Query(25.0, ge=0.0, le=255.0),
+    threshold_offset: int = Query(0, ge=-100, le=100),
+    min_contrast: float = Query(35.0, ge=0.0, le=255.0),
     idempotency_key: str = Header(
         ...,
         alias="Idempotency-Key",
@@ -381,10 +400,10 @@ async def count_batch(
             detail=f"批量处理最多 {settings.max_batch_size} 张图片",
         )
 
-    config = EnhancedCounterConfig(
-        exclude_border=exclude_border,
-        threshold_offset=threshold_offset,
-        min_contrast=min_contrast,
+    counter, config = _counter_for_request(
+        exclude_border,
+        threshold_offset,
+        min_contrast,
     )
 
     results: list[BatchItemResult] = []
@@ -419,7 +438,7 @@ async def count_batch(
 
             async with processing_slots:
                 result = await asyncio.wait_for(
-                    run_in_threadpool(count_dark_clusters, decoded.bgr, config),
+                    run_in_threadpool(counter, decoded.bgr, config),
                     timeout=settings.request_timeout_seconds,
                 )
 

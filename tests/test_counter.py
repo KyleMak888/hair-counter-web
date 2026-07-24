@@ -15,6 +15,7 @@ from app.counter import CounterConfig, _component_contrast, count_dark_clusters 
 from app.counter_enhanced import (  # noqa: E402
     EnhancedCounterConfig,
     count_dark_clusters_enhanced,
+    count_dark_clusters_enhanced_v2,
 )
 from app.image_io import decode_and_validate_image  # noqa: E402
 from app.main import health  # noqa: E402
@@ -130,12 +131,14 @@ def test_low_resolution_source_counts_marked_clusters() -> None:
         assert actual == expected
 
 
-def test_enhanced_defaults_use_balanced_preset() -> None:
+def test_enhanced_v2_defaults_are_conservative() -> None:
     config = EnhancedCounterConfig()
-    assert config.threshold_offset == -10
-    assert config.min_contrast == 25.0
-    assert config.min_confidence_threshold == 0.4
-    assert config.scale_factors == (0.8, 1.0, 1.2)
+    assert config.threshold_offset == 0
+    assert config.min_contrast == 35.0
+    assert config.min_confidence_threshold == 0.45
+    assert config.scale_factors == (0.9, 1.0, 1.1)
+    assert not config.use_adaptive_threshold
+    assert not config.enable_opening
 
 
 def test_enhanced_counter_preserves_cluster_split_estimation() -> None:
@@ -156,6 +159,80 @@ def test_enhanced_counter_preserves_cluster_split_estimation() -> None:
         assert result.count == expected, kind
         assert any(item.strand_count > 1 for item in result.items), kind
         assert result.count == sum(item.strand_count for item in result.items)
+
+
+def test_enhanced_v2_keeps_thin_visible_hair() -> None:
+    image = np.full((260, 360, 3), 238, dtype=np.uint8)
+    cv2.line(image, (44, 80), (300, 95), (18, 18, 18), 2, cv2.LINE_AA)
+
+    result = count_dark_clusters_enhanced_v2(
+        image,
+        EnhancedCounterConfig(
+            enable_multiscale=False,
+            use_confidence_filter=False,
+            min_contrast=20,
+            min_aspect_ratio=2.0,
+        ),
+    )
+
+    assert result.count >= 1
+    assert max(item.bbox[2] for item in result.items) > 120
+
+
+def test_enhanced_v2_filters_round_background_spots() -> None:
+    image = np.full((260, 360, 3), 238, dtype=np.uint8)
+    for index in range(12):
+        center = (40 + (index % 6) * 52, 70 + (index // 6) * 74)
+        cv2.circle(image, center, 5, (35, 35, 35), -1)
+
+    result = count_dark_clusters_enhanced_v2(
+        image,
+        EnhancedCounterConfig(
+            enable_multiscale=False,
+            use_confidence_filter=False,
+            min_contrast=20,
+        ),
+    )
+
+    assert result.count == 0
+
+
+def test_enhanced_v2_keeps_marked_fixture_recall_near_legacy() -> None:
+    image = cv2.imread(str(ROOT / "tests" / "fixtures" / "touching-hairs-source.jpg"))
+    legacy = count_dark_clusters(
+        image,
+        CounterConfig(threshold_offset=17, min_contrast=23),
+    )
+    enhanced = count_dark_clusters_enhanced_v2(
+        image,
+        EnhancedCounterConfig(
+            threshold_offset=17,
+            min_contrast=23,
+            enable_multiscale=False,
+            use_confidence_filter=False,
+            min_aspect_ratio=1.5,
+        ),
+    )
+
+    marked_boxes = [
+        (194, 11, 36, 28),
+        (206, 66, 29, 23),
+        (202, 184, 38, 37),
+    ]
+    for x, y, width, height in marked_boxes:
+        legacy_actual = sum(
+            item.strand_count
+            for item in legacy.items
+            if x <= item.center[0] <= x + width and y <= item.center[1] <= y + height
+        )
+        enhanced_actual = sum(
+            item.strand_count
+            for item in enhanced.items
+            if x <= item.center[0] <= x + width and y <= item.center[1] <= y + height
+        )
+        assert enhanced_actual >= legacy_actual
+
+    assert len(enhanced.items) <= len(legacy.items) + 3
 
 
 def test_oversized_image_is_rejected_before_decode() -> None:

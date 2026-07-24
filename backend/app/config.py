@@ -36,6 +36,14 @@ def _env_bool(name: str, default: bool) -> bool:
     raise RuntimeError(f"{name} must be a boolean")
 
 
+def _env_choice(name: str, default: str, choices: set[str]) -> str:
+    value = os.getenv(name, default).strip().lower()
+    if value in choices:
+        return value
+    allowed = ", ".join(sorted(choices))
+    raise RuntimeError(f"{name} must be one of: {allowed}")
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "Hair Counter API")
@@ -45,6 +53,11 @@ class Settings:
     max_image_side: int = _env_int("MAX_IMAGE_SIDE", 6000)
     max_processing_concurrency: int = _env_int("MAX_PROCESSING_CONCURRENCY", 2)
     request_timeout_seconds: float = _env_float("REQUEST_TIMEOUT_SECONDS", 45.0)
+    count_algorithm: str = _env_choice(
+        "COUNT_ALGORITHM",
+        "legacy",
+        {"legacy", "enhanced_v2"},
+    )
     max_batch_size: int = _env_int("MAX_BATCH_SIZE", 10)
     database_path: str = os.getenv("DATABASE_PATH", "/tmp/hair-counter.db")
     session_ttl_seconds: int = _env_int("SESSION_TTL_SECONDS", 7 * 24 * 60 * 60)

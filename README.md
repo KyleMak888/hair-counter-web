@@ -17,7 +17,7 @@ OpenCV 计数算法 + SQLite 账户账务
 - 拍照、上传或拖拽图片；
 - 浏览器端统一 EXIF 方向；
 - 超大图片自动缩小到服务端限制；
-- OpenCV 增强算法自动识别和计数；
+- OpenCV 自动识别和计数；
 - 批量上传多张图片，逐张识别和计费；
 - 自动估算毛发簇中的平行毛发数量；
 - 管理员创建机构账号，并在按量计费与 SVIP 买断之间转换；
@@ -48,6 +48,14 @@ cp .env.example .env
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=replace-with-a-strong-password
 ```
+
+计数算法默认使用稳定版：
+
+```dotenv
+COUNT_ALGORITHM=legacy
+```
+
+`COUNT_ALGORITHM=enhanced_v2` 仅用于内部样本验证和诊断，未完成样本回归前不要作为生产默认值。
 
 默认使用 DaoCloud 的 Docker Hub 代理和阿里云 PyPI 镜像。若网络环境可直接访问官方源，可在 `.env` 改为：
 
@@ -101,8 +109,8 @@ Content-Type: multipart/form-data
 
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
-| `threshold_offset` | `-10` | 越大越严格，越小越灵敏 |
-| `min_contrast` | `25` | 最低局部对比度 |
+| `threshold_offset` | `0` | 越大越严格，越小越灵敏 |
+| `min_contrast` | `35` | 最低局部对比度 |
 | `exclude_border` | `false` | 是否排除边缘目标 |
 
 请求必须携带登录 Cookie 和本次操作唯一的 `Idempotency-Key`。同一个账号重复提交同一个 Key 时返回原结果且不再次扣费；重新点击识别会生成新 Key 并重新收费。
@@ -116,7 +124,7 @@ curl -c cookies.txt \
   http://127.0.0.1:8080/api/auth/login
 
 curl -X POST \
-  "http://127.0.0.1:8080/api/count?threshold_offset=-10&min_contrast=25&exclude_border=false" \
+  "http://127.0.0.1:8080/api/count?threshold_offset=0&min_contrast=35&exclude_border=false" \
   -b cookies.txt \
   -H "Idempotency-Key: request-20260714-0001" \
   -F "file=@your-image.jpg"
@@ -168,7 +176,7 @@ Content-Type: multipart/form-data
 
 ```bash
 curl -X POST \
-  "http://127.0.0.1:8080/api/count/batch?threshold_offset=-10&min_contrast=25" \
+  "http://127.0.0.1:8080/api/count/batch?threshold_offset=0&min_contrast=35" \
   -b cookies.txt \
   -H "Idempotency-Key: batch-20260714-0001" \
   -F "files=@image1.jpg" \
@@ -192,6 +200,16 @@ curl -X POST \
   "errors": []
 }
 ```
+
+### 离线算法诊断
+
+增强算法问题排查使用离线脚本，不影响线上计费：
+
+```bash
+python3 diagnose_algorithms.py sample-images/regression/problem-1.jpg
+```
+
+输出位于 `output/algorithm_diagnostics/`，包含旧稳定版、增强 v1、增强 v2 的标注图，以及增强 v2 的候选过滤统计 JSON。
 
 ### 账户与管理接口
 
