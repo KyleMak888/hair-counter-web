@@ -120,6 +120,10 @@
       const succeeded = item.status === "done" && Boolean(item.response);
       const failed = item.status === "error";
       const automaticCount = succeeded ? totalStrands(item.initialItems) : null;
+      // 簇数 = 最终保留的「识别簇/目标」个数（人工补点/独立添加的根不计入簇，与最终根数口径分离）
+      const clusterCount = succeeded
+        ? (item.finalItems || []).filter((entry) => !entry.manual).length
+        : null;
       const markerRows = succeeded
         ? markerRowsForItem(item, pathsByQueueIndex.get(item.queueIndex) || "")
         : [];
@@ -144,6 +148,7 @@
         annotatedPath: succeeded ? (pathsByQueueIndex.get(item.queueIndex) || "") : "",
         status: succeeded ? "成功" : failed ? "失败" : "未处理",
         automaticCount,
+        clusterCount,
         manualIncreaseCount,
         manualDeletionCount,
         manualPointCount,

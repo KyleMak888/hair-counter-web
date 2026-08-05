@@ -4,8 +4,8 @@
   const MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   const encoder = new TextEncoder();
   const summaryHeaders = [
-    "序号", "原图文件名", "标注图路径", "处理状态", "自动识别数量", "人工增加数量",
-    "人工删除数量", "人工补点数量", "人工净修正数量", "最终数量", "是否人工修正", "失败原因",
+    "序号", "原图文件名", "标注图路径", "处理状态", "自动识别数量", "簇数",
+    "人工增加数量", "人工删除数量", "人工补点数量", "人工净修正数量", "最终数量", "是否人工修正", "失败原因",
   ];
   const markerHeaders = [
     "图片序号", "原图文件名", "标注图路径", "原始簇编号", "最终标注编号", "簇内序号",
@@ -59,20 +59,21 @@
         textCell(`C${rowNumber}`, row.annotatedPath),
         textCell(`D${rowNumber}`, row.status),
         optionalNumberCell(`E${rowNumber}`, row.automaticCount),
-        optionalNumberCell(`F${rowNumber}`, row.manualIncreaseCount),
-        optionalNumberCell(`G${rowNumber}`, row.manualDeletionCount),
-        optionalNumberCell(`H${rowNumber}`, row.manualPointCount),
-        optionalNumberCell(`I${rowNumber}`, row.manualNetAdjustment, 8),
-        optionalNumberCell(`J${rowNumber}`, row.finalCount),
-        textCell(`K${rowNumber}`, row.manuallyEdited),
-        textCell(`L${rowNumber}`, row.error, 3),
+        optionalNumberCell(`F${rowNumber}`, row.clusterCount),
+        optionalNumberCell(`G${rowNumber}`, row.manualIncreaseCount),
+        optionalNumberCell(`H${rowNumber}`, row.manualDeletionCount),
+        optionalNumberCell(`I${rowNumber}`, row.manualPointCount),
+        optionalNumberCell(`J${rowNumber}`, row.manualNetAdjustment, 8),
+        optionalNumberCell(`K${rowNumber}`, row.finalCount),
+        textCell(`L${rowNumber}`, row.manuallyEdited),
+        textCell(`M${rowNumber}`, row.error, 3),
       ].join("");
       return `<row r="${rowNumber}" ht="22" customHeight="1">${cells}</row>`;
     }).join("");
 
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <dimension ref="A1:L${rowCount}"/>
+  <dimension ref="A1:M${rowCount}"/>
   <sheetViews>
     <sheetView showGridLines="0" workbookViewId="0">
       <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
@@ -86,16 +87,17 @@
     <col min="3" max="3" width="44" customWidth="1"/>
     <col min="4" max="4" width="13" customWidth="1"/>
     <col min="5" max="5" width="16" customWidth="1"/>
-    <col min="6" max="8" width="17" customWidth="1"/>
-    <col min="9" max="9" width="18" customWidth="1"/>
-    <col min="10" max="11" width="16" customWidth="1"/>
-    <col min="12" max="12" width="48" customWidth="1"/>
+    <col min="6" max="6" width="10" customWidth="1"/>
+    <col min="7" max="9" width="17" customWidth="1"/>
+    <col min="10" max="10" width="18" customWidth="1"/>
+    <col min="11" max="12" width="16" customWidth="1"/>
+    <col min="13" max="13" width="48" customWidth="1"/>
   </cols>
   <sheetData>
     <row r="1" ht="28" customHeight="1">${headerCells(summaryHeaders)}</row>
     ${dataRows}
   </sheetData>
-  <autoFilter ref="A1:L${rowCount}"/>
+  <autoFilter ref="A1:M${rowCount}"/>
   <pageMargins left="0.4" right="0.4" top="0.6" bottom="0.6" header="0.3" footer="0.3"/>
 </worksheet>`;
   }

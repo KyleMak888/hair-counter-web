@@ -68,6 +68,7 @@ test("creates per-image summary counts that reconcile automatic, manual, and fin
     annotatedPath: "标注图/已修正-annotated.png",
     status: "成功",
     automaticCount: 5,
+    clusterCount: 2,
     manualIncreaseCount: 0,
     manualDeletionCount: 1,
     manualPointCount: 0,
@@ -114,6 +115,7 @@ test("keeps split correction counts when additions and deletions offset", () => 
   const [row] = BatchExportData.createSummaryRows(snapshot, new Map());
   assert.deepEqual({
     automaticCount: row.automaticCount,
+    clusterCount: row.clusterCount,
     manualIncreaseCount: row.manualIncreaseCount,
     manualDeletionCount: row.manualDeletionCount,
     manualPointCount: row.manualPointCount,
@@ -122,6 +124,7 @@ test("keeps split correction counts when additions and deletions offset", () => 
     manuallyEdited: row.manuallyEdited,
   }, {
     automaticCount: 6,
+    clusterCount: 2,
     manualIncreaseCount: 2,
     manualDeletionCount: 3,
     manualPointCount: 1,

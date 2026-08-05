@@ -1,6 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
+const MANUAL_COLOR = "#8b5cf6";
+
 let MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 let MAX_SIDE = 6000;
 let MAX_PIXELS = 20_000_000;
@@ -33,6 +35,8 @@ const state = {
   batchViewIndex: -1,
   singleViewerState: null,
   imageView: "annotated",
+  selectedIndex: -1,
+  colors: { original: "#16a34a", adjusted: "#0ea5e9" },
 };
 
 const fileInput = $("#fileInput");
@@ -522,6 +526,7 @@ async function analyze() {
     state.autoItems = payload.items.map((item) => ({ ...item, manual: false }));
     state.items = state.autoItems.map(cloneItem);
     state.dirty = false;
+    state.selectedIndex = -1;
     state.imageView = "annotated";
     updateImageViewToggle();
     setEditMode("view");
@@ -603,15 +608,26 @@ function drawAnnotatedImage(targetCanvas, image, sourceItems) {
   targetContext.font = `700 ${fontSize}px Inter, Arial, sans-serif`;
   targetContext.textBaseline = "middle";
 
-  for (const item of items) {
+  const isInteractive = targetCanvas === canvas;
+  items.forEach((item, index) => {
     const [x, y, width, height] = item.bbox;
     const [centerX, centerY] = item.center;
-    const color = item.manual ? "#8b5cf6" : item.partial ? "#f59e0b" : "#16a34a";
-    targetContext.strokeStyle = color;
-    targetContext.setLineDash(item.manual ? [5 * scale, 3 * scale] : []);
+    const isSelected = isInteractive && index === state.selectedIndex;
+    const strokeColor = item.manual ? MANUAL_COLOR : item.adjusted ? state.colors.adjusted : item.partial ? "#f59e0b" : state.colors.original;
+    const fillColor = strokeColor;
+    const dashed = item.manual;
+    targetContext.strokeStyle = strokeColor;
+    targetContext.setLineDash(dashed ? [5 * scale, 3 * scale] : []);
     targetContext.strokeRect(x - lineWidth / 2, y - lineWidth / 2, width + lineWidth, height + lineWidth);
     targetContext.setLineDash([]);
-    targetContext.fillStyle = item.manual ? "#8b5cf6" : "#ef4444";
+    if (item.adjusted) {
+      targetContext.globalAlpha = 0.28;
+      targetContext.lineWidth = lineWidth + 3 * scale;
+      targetContext.strokeRect(x - lineWidth / 2, y - lineWidth / 2, width + lineWidth, height + lineWidth);
+      targetContext.globalAlpha = 1;
+      targetContext.lineWidth = lineWidth;
+    }
+    targetContext.fillStyle = fillColor;
     targetContext.beginPath(); targetContext.arc(centerX, centerY, radius, 0, Math.PI * 2); targetContext.fill();
 
     const count = strandCount(item);
@@ -624,9 +640,18 @@ function drawAnnotatedImage(targetCanvas, image, sourceItems) {
     let labelY = y - boxHeight - 3 * scale;
     if (labelY < 1) labelY = Math.min(canvasHeight - boxHeight - 1, y + height + 3 * scale);
     targetContext.fillStyle = "rgba(255,255,255,.58)"; targetContext.fillRect(labelX, labelY, boxWidth, boxHeight);
-    targetContext.strokeStyle = color; targetContext.lineWidth = Math.max(1, scale); targetContext.strokeRect(labelX, labelY, boxWidth, boxHeight);
+    targetContext.strokeStyle = strokeColor; targetContext.lineWidth = Math.max(1, scale); targetContext.strokeRect(labelX, labelY, boxWidth, boxHeight);
     targetContext.fillStyle = "#1d4ed8"; targetContext.fillText(text, labelX + padX, labelY + boxHeight / 2 + .5);
-  }
+    if (isSelected) {
+      targetContext.save();
+      targetContext.strokeStyle = "#2563eb";
+      targetContext.lineWidth = Math.max(3, 3 * scale);
+      targetContext.setLineDash([]);
+      const pad = 4 * scale;
+      targetContext.strokeRect(x - lineWidth / 2 - pad, y - lineWidth / 2 - pad, width + lineWidth + pad * 2, height + lineWidth + pad * 2);
+      targetContext.restore();
+    }
+  });
 }
 
 function drawResults() {
@@ -674,9 +699,11 @@ function updateTable() {
   body.innerHTML = "";
   for (const [index, item] of normalizedItems().entries()) {
     const count = strandCount(item);
-    const status = item.manual ? ["手动", "manual"] : item.partial ? ["边缘", "partial"] : count > 1 ? ["毛束", "cluster"] : ["正常", "normal"];
+    const status = item.manual ? ["独立添加", "manual"] : item.adjusted ? ["修正", "adjusted"] : item.partial ? ["边缘", "partial"] : count > 1 ? ["毛束", "cluster"] : ["正常", "normal"];
     const score = Number(item.confidence || 0) * Number(item.split_confidence ?? 1);
     const row = document.createElement("tr");
+    row.dataset.index = index;
+    if (index === state.selectedIndex) row.classList.add("selected");
     row.innerHTML = `<td>${item.id}</td><td>${Number(item.center[0]).toFixed(1)}, ${Number(item.center[1]).toFixed(1)}</td><td>${item.bbox[2]} × ${item.bbox[3]}</td><td><div class="strand-stepper"><button type="button" data-strand-action="decrease" data-index="${index}" aria-label="减少第 ${item.id} 簇的数量" title="减少" ${count === 1 ? "disabled" : ""}>−</button><output>${count}</output><button type="button" data-strand-action="increase" data-index="${index}" aria-label="增加第 ${item.id} 簇的数量" title="增加">＋</button></div></td><td>${item.manual ? "—" : Number(item.contrast).toFixed(1)}</td><td>${item.manual ? "—" : `${Math.round(score * 100)}%`}</td><td><span class="status-tag ${status[1]}">${status[0]}</span></td>`;
     body.appendChild(row);
   }
@@ -684,6 +711,7 @@ function updateTable() {
 
 function renderAll() {
   saveActiveBatchViewer();
+  if (state.selectedIndex >= state.items.length) state.selectedIndex = -1;
   drawResults();
   updateMetrics();
   updateTable();
@@ -702,11 +730,12 @@ function setEditMode(mode) {
   });
   $("#restoreButton").disabled = editingDisabled;
   const wrap = $("#canvasWrap");
-  wrap.classList.toggle("mode-add", mode === "add");
+  wrap.classList.toggle("mode-add", mode === "add" || mode === "cluster-add");
   wrap.classList.toggle("mode-remove", mode === "remove");
   const tip = $("#canvasTip");
-  if (mode === "add") tip.textContent = "点击图片空白处添加目标";
-  if (mode === "remove") tip.textContent = "点击标记可逐根减少";
+  if (mode === "add") tip.textContent = "点击图片空白处，独立添加目标";
+  if (mode === "cluster-add") tip.textContent = "点击已有目标，逐根补加数量（该簇将高亮）";
+  if (mode === "remove") tip.textContent = "点击目标可逐根减少（减到 0 删除）";
   tip.classList.toggle("show", mode !== "view");
 }
 
@@ -729,16 +758,36 @@ function findItemIndex(point) {
 }
 
 function handleCanvasClick(event) {
-  if (state.editMode === "view") return;
   const point = canvasPoint(event);
+  if (state.editMode === "view") {
+    const index = findItemIndex(point);
+    if (index >= 0) selectItem(index);
+    else if (state.selectedIndex !== -1) { state.selectedIndex = -1; renderAll(); }
+    return;
+  }
   if (state.editMode === "remove") {
     const index = findItemIndex(point);
     if (index >= 0) {
       const item = state.items[index];
-      if (strandCount(item) > 1) item.strand_count = strandCount(item) - 1;
-      else state.items.splice(index, 1);
+      if (strandCount(item) > 1) {
+        item.strand_count = strandCount(item) - 1;
+        if (!item.manual) item.adjusted = true;
+      } else state.items.splice(index, 1);
       refreshDirtyState();
       renderAll();
+    }
+    return;
+  }
+  if (state.editMode === "cluster-add") {
+    const index = findItemIndex(point);
+    if (index >= 0) {
+      const item = state.items[index];
+      item.strand_count = strandCount(item) + 1;
+      item.adjusted = true;
+      refreshDirtyState();
+      renderAll();
+    } else {
+      flashCanvasTip("请点在已识别的目标（簇）上补加");
     }
     return;
   }
@@ -747,6 +796,26 @@ function handleCanvasClick(event) {
   const y = Math.max(0, Math.min(canvas.height - side, Math.round(point.y - side / 2)));
   state.items.push({ id: state.items.length + 1, bbox: [x, y, side, side], center: [Number(point.x.toFixed(2)), Number(point.y.toFixed(2))], area: side * side, contrast: 0, confidence: 1, partial: x === 0 || y === 0 || x + side >= canvas.width || y + side >= canvas.height, strand_count: 1, split_confidence: 1, manual: true });
   refreshDirtyState(); renderAll();
+}
+
+function flashCanvasTip(message) {
+  const tip = $("#canvasTip");
+  tip.textContent = message;
+  tip.classList.add("show");
+  clearTimeout(flashCanvasTip._timer);
+  flashCanvasTip._timer = setTimeout(() => {
+    if (state.editMode === "cluster-add") tip.textContent = "点击已有目标，逐根补加数量（该簇将高亮）";
+    tip.classList.toggle("show", state.editMode !== "view");
+  }, 1500);
+}
+
+function selectItem(index) {
+  if (index < 0 || index >= state.items.length) return;
+  state.selectedIndex = index;
+  renderAll();
+  flashCanvasTip(`已选中第 ${state.items[index].id} 簇（点空白处取消）`);
+  const row = document.querySelector(`#itemsTable tr[data-index="${index}"]`);
+  if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function restoreAutoItems() { state.items = state.autoItems.map(cloneItem); state.dirty = false; renderAll(); }
@@ -1117,6 +1186,7 @@ function viewBatchItem(index) {
   saveActiveBatchViewer();
   state.batchViewIndex = index;
   applyViewerState(batchViewerState(item));
+  state.selectedIndex = -1;
 
   setEditMode("view");
   renderAll();
@@ -1490,15 +1560,34 @@ sensitivity.addEventListener("input", () => $("#sensitivityValue").textContent =
 contrast.addEventListener("input", () => $("#contrastValue").textContent = contrast.value);
 canvas.addEventListener("click", handleCanvasClick);
 imageViewToggle.addEventListener("click", () => setImageView(state.imageView === "original" ? "annotated" : "original"));
+$("#colorOriginal").addEventListener("input", (event) => {
+  state.colors.original = event.target.value;
+  drawResults();
+});
+$("#colorAdjusted").addEventListener("input", (event) => {
+  state.colors.adjusted = event.target.value;
+  document.documentElement.style.setProperty("--adjusted", state.colors.adjusted);
+  drawResults();
+});
 $("#itemsTable").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-strand-action]");
-  if (!button) return;
-  const item = state.items[Number(button.dataset.index)];
-  if (!item) return;
-  if (button.dataset.strandAction === "increase") item.strand_count = strandCount(item) + 1;
-  if (button.dataset.strandAction === "decrease" && strandCount(item) > 1) item.strand_count = strandCount(item) - 1;
-  refreshDirtyState();
-  renderAll();
+  if (button) {
+    const item = state.items[Number(button.dataset.index)];
+    if (!item) return;
+    if (button.dataset.strandAction === "increase") {
+      item.strand_count = strandCount(item) + 1;
+      if (!item.manual) item.adjusted = true;
+    }
+    if (button.dataset.strandAction === "decrease" && strandCount(item) > 1) {
+      item.strand_count = strandCount(item) - 1;
+      if (!item.manual) item.adjusted = true;
+    }
+    refreshDirtyState();
+    renderAll();
+    return;
+  }
+  const row = event.target.closest("tr[data-index]");
+  if (row) selectItem(Number(row.dataset.index));
 });
 $("#restoreButton").addEventListener("click", restoreAutoItems);
 $("#downloadJson").addEventListener("click", exportJson);
@@ -1554,7 +1643,90 @@ $("#balanceAdjustmentForm").addEventListener("submit", submitBalanceAdjustment);
 $("#passwordResetForm").addEventListener("submit", submitPasswordReset);
 $$(".dialog-close").forEach((button) => button.addEventListener("click", () => closeDialog(button.closest("dialog"))));
 $$(".plan-selector input[name='plan']").forEach((input) => input.addEventListener("change", () => updatePlanFields(input.form)));
+document.documentElement.style.setProperty("--adjusted", state.colors.adjusted);
 updateImageViewToggle();
 setEditMode("view");
+
+// 三窗口独立缩放：分隔条拖拽 + 布局持久化
+(function setupResizableLayout() {
+  const controlSplitter = $("#controlSplitter");
+  const resultSplitter = $("#resultSplitter");
+  const workspaceEl = $(".workspace");
+  const resultSplitEl = $("#resultSplit");
+  const viewerCard = $("#viewerCard");
+  const LAYOUT_KEY = "hair-counter:layout";
+
+  function readVar(element, name) {
+    const value = getComputedStyle(element).getPropertyValue(name).trim();
+    const parsed = parseFloat(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  function saveLayout() {
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify({
+        control: getComputedStyle(workspaceEl).getPropertyValue("--control-width").trim(),
+        viewer: getComputedStyle(resultSplitEl).getPropertyValue("--viewer-width").trim(),
+      }));
+    } catch (_) {}
+  }
+  function restoreLayout() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}");
+      if (saved.control) workspaceEl.style.setProperty("--control-width", saved.control);
+      if (saved.viewer) resultSplitEl.style.setProperty("--viewer-width", saved.viewer);
+    } catch (_) {}
+  }
+  function makeSplitter(splitter, getStart, apply, min, max, onCommit) {
+    splitter.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      const start = event.clientX;
+      const base = getStart();
+      splitter.classList.add("dragging");
+      try { splitter.setPointerCapture(event.pointerId); } catch (_) {}
+      const move = (ev) => {
+        let value = base + (ev.clientX - start);
+        value = Math.max(min, Math.min(max, value));
+        apply(value);
+      };
+      const up = () => {
+        splitter.classList.remove("dragging");
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", up);
+        onCommit();
+      };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+    });
+    splitter.addEventListener("keydown", (event) => {
+      const step = event.shiftKey ? 48 : 16;
+      let delta = 0;
+      if (event.key === "ArrowLeft") delta = -step;
+      else if (event.key === "ArrowRight") delta = step;
+      else return;
+      event.preventDefault();
+      const value = Math.max(min, Math.min(max, getStart() + delta));
+      apply(value);
+      onCommit();
+    });
+  }
+
+  restoreLayout();
+  makeSplitter(
+    controlSplitter,
+    () => readVar(workspaceEl, "--control-width") ?? controlSplitter.previousElementSibling.offsetWidth,
+    (value) => workspaceEl.style.setProperty("--control-width", `${value}px`),
+    280,
+    Math.min(560, workspaceEl.clientWidth * 0.46),
+    saveLayout
+  );
+  makeSplitter(
+    resultSplitter,
+    () => readVar(resultSplitEl, "--viewer-width") ?? (viewerCard.offsetWidth / resultSplitEl.clientWidth) * 100,
+    (value) => resultSplitEl.style.setProperty("--viewer-width", `${value}%`),
+    30,
+    75,
+    saveLayout
+  );
+})();
 
 checkHealth().then(loadSession);

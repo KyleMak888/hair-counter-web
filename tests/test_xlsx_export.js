@@ -37,6 +37,7 @@ test("creates an Excel-compatible batch summary with typed counts", async () => 
         annotatedPath: "标注图/样本___-annotated.png",
         status: "成功",
         automaticCount: 20,
+        clusterCount: 17,
         manualIncreaseCount: 1,
         manualDeletionCount: 4,
         manualPointCount: 1,
@@ -51,6 +52,7 @@ test("creates an Excel-compatible batch summary with typed counts", async () => 
         annotatedPath: "",
         status: "失败",
         automaticCount: null,
+        clusterCount: null,
         manualIncreaseCount: null,
         manualDeletionCount: null,
         manualPointCount: null,
@@ -120,14 +122,16 @@ test("creates an Excel-compatible batch summary with typed counts", async () => 
   assert.match(workbookXml, /sheet name="逐图结果"/);
   assert.match(workbookXml, /sheet name="标记明细"/);
   assert.match(sheetXml, /<pane ySplit="1"[^>]+state="frozen"\/>/);
-  assert.match(sheetXml, /<autoFilter ref="A1:L3"\/>/);
+  assert.match(sheetXml, /<autoFilter ref="A1:M3"\/>/);
   assert.match(sheetXml, /<c r="A2" s="4" t="n"><v>1<\/v><\/c>/);
   assert.match(sheetXml, /<c r="E2" s="2" t="n"><v>20<\/v><\/c>/);
-  assert.match(sheetXml, /<c r="F2" s="2" t="n"><v>1<\/v><\/c>/);
-  assert.match(sheetXml, /<c r="G2" s="2" t="n"><v>4<\/v><\/c>/);
-  assert.match(sheetXml, /<c r="H2" s="2" t="n"><v>1<\/v><\/c>/);
-  assert.match(sheetXml, /<c r="I2" s="8" t="n"><v>-2<\/v><\/c>/);
-  assert.match(sheetXml, /<c r="J2" s="2" t="n"><v>18<\/v><\/c>/);
+  assert.match(sheetXml, /<c r="F2" s="2" t="n"><v>17<\/v><\/c>/);
+  assert.match(sheetXml, /<c r="G2" s="2" t="n"><v>1<\/v><\/c>/);
+  assert.match(sheetXml, /<c r="H2" s="2" t="n"><v>4<\/v><\/c>/);
+  assert.match(sheetXml, /<c r="I2" s="2" t="n"><v>1<\/v><\/c>/);
+  assert.match(sheetXml, /<c r="J2" s="8" t="n"><v>-2<\/v><\/c>/);
+  assert.match(sheetXml, /<c r="K2" s="2" t="n"><v>18<\/v><\/c>/);
+  assert.match(sheetXml, /簇数/);
   assert.match(sheetXml, /人工增加数量/);
   assert.match(sheetXml, /人工删除数量/);
   assert.match(sheetXml, /人工补点数量/);

@@ -7,7 +7,7 @@
   <meta name="description" content="毛发与深色小目标计数工具" />
   <title>毛发计数器</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="/styles.css?v=1.3.0" />
+  <link rel="stylesheet" href="/styles.css?v=1.3.2" />
 </head>
 <body>
   <main class="auth-screen" id="authScreen" hidden>
@@ -218,6 +218,8 @@
         </div>
       </aside>
 
+      <div class="splitter splitter-v" id="controlSplitter" role="separator" aria-orientation="vertical" tabindex="0" aria-label="拖动调整左侧操作面板宽度"></div>
+
       <section class="result-panel">
         <div class="batch-queue-card card" id="batchQueueCard" hidden>
           <div class="batch-queue-header">
@@ -254,15 +256,21 @@
             </article>
           </div>
 
-          <div class="viewer-card card">
+          <div class="result-split" id="resultSplit">
+          <div class="viewer-card card" id="viewerCard">
             <div class="viewer-toolbar">
               <div><h2>识别结果</h2><p>可添加、删除或恢复目标标记</p></div>
               <div class="tool-actions">
                 <button class="toolbar-button active" data-mode="view" type="button">查看</button>
-                <button class="toolbar-button" data-mode="add" type="button">＋ 添加</button>
-                <button class="toolbar-button" data-mode="remove" type="button">－ 删除</button>
+                <button class="toolbar-button" data-mode="cluster-add" type="button" title="点击已有目标，逐根补加数量">簇内加</button>
+                <button class="toolbar-button" data-mode="add" type="button" title="点击空白处，独立添加目标">＋ 添加</button>
+                <button class="toolbar-button" data-mode="remove" type="button" title="点击目标，逐根减少">－ 删除</button>
                 <button class="toolbar-button subtle" id="restoreButton" type="button">恢复</button>
                 <button class="toolbar-button image-view-toggle" id="imageViewToggle" type="button" aria-pressed="false">显示原图</button>
+                <span class="color-controls">
+                  <label class="color-field" title="自动识别目标颜色"><span>原始色</span><input type="color" id="colorOriginal" value="#16a34a" /></label>
+                  <label class="color-field" title="人工修正后的簇高亮颜色"><span>人工色</span><input type="color" id="colorAdjusted" value="#0ea5e9" /></label>
+                </span>
               </div>
             </div>
 
@@ -275,7 +283,8 @@
               <div class="legend">
                 <span><i class="legend-box normal"></i>完整目标</span>
                 <span><i class="legend-box partial"></i>边缘目标</span>
-                <span><i class="legend-box manual"></i>手动添加</span>
+                <span><i class="legend-box adjusted"></i>人工修正簇</span>
+                <span><i class="legend-box manual"></i>独立添加</span>
               </div>
               <div class="download-actions">
                 <button class="secondary-button" id="downloadJson" type="button">导出 JSON</button>
@@ -284,7 +293,8 @@
             </div>
           </div>
 
-          <div class="details-card card">
+          <div class="splitter splitter-v" id="resultSplitter" role="separator" aria-orientation="vertical" tabindex="0" aria-label="拖动调整画布与明细宽度"></div>
+          <div class="details-card card" id="detailsCard">
             <div class="details-header">
               <div><h2>目标明细</h2><p>查看每个目标的位置与状态</p></div>
               <span id="itemTotalBadge">0 项</span>
@@ -295,6 +305,7 @@
                 <tbody id="itemsTable"></tbody>
               </table>
             </div>
+          </div>
           </div>
         </div>
       </section>
@@ -390,8 +401,8 @@
   </dialog>
 
   <script src="/zip.js?v=1.3.0" defer></script>
-  <script src="/batch-export.js?v=1.4.1" defer></script>
-  <script src="/xlsx.js?v=1.4.1" defer></script>
-  <script src="/app.js?v=1.4.1" defer></script>
+  <script src="/batch-export.js?v=1.4.2" defer></script>
+  <script src="/xlsx.js?v=1.4.2" defer></script>
+  <script src="/app.js?v=1.4.4" defer></script>
 </body>
 </html>
