@@ -127,14 +127,17 @@ function makeFakeDocument() {
     if (!registry.has(selector)) registry.set(selector, makeFakeElement());
     return registry.get(selector);
   };
+  const listeners = {};
   return {
     _registry: registry,
+    _listeners: listeners,
     querySelector: (sel) => get(sel),
     getElementById: (id) => get(`#${id}`),
     querySelectorAll: () => [],
     createElement: (tag) => makeFakeElement(tag),
-    addEventListener: () => {},
-    removeEventListener: () => {},
+    addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); },
+    removeEventListener: (type, fn) => { if (listeners[type]) listeners[type] = listeners[type].filter((f) => f !== fn); },
+    dispatchEvent: (ev) => { (listeners[ev.type] || []).forEach((fn) => fn(ev)); return true; },
     body: makeFakeElement("body"),
     documentElement: makeFakeElement("html"),
     activeElement: null,
@@ -302,4 +305,109 @@ test("selection state resets safely when items shrink (renderAll guard)", () => 
   assert.equal(app.state.selectedIndex, -1, "stale selection is cleared by renderAll guard");
   const table = app.$("#itemsTable");
   assert.equal(table.children.length, 1);
+});
+
+// ---- Layout remediation (feedback: resize rewrite) -----------------------
+
+function readInlinePx(el, name) {
+  const raw = (el.style.getPropertyValue(name) || "").trim();
+  if (!raw) return null;
+  const px = parseFloat(raw);
+  return Number.isNaN(px) ? null : px;
+}
+
+// axis "y" drives the canvas/details divider (vertical drag); default "x" is horizontal.
+function dragSplitter(sandbox, selector, from, to, axis) {
+  const splitter = sandbox.document.querySelector(selector);
+  const down = splitter._listeners.pointerdown[0];
+  const start = axis === "y" ? { clientY: from } : { clientX: from };
+  down({ ...start, pointerId: 1, preventDefault() {} });
+  const move = axis === "y" ? { clientY: to } : { clientX: to };
+  sandbox.document.dispatchEvent({ type: "pointermove", ...move, pointerId: 1 });
+  sandbox.document.dispatchEvent({ type: "pointerup", ...move, pointerId: 1 });
+}
+
+test("control splitter drag writes --control-width in px, 1:1 with cursor", () => {
+  const sandbox = buildSandbox();
+  loadApp(sandbox);
+  const workspace = sandbox.document.querySelector(".workspace");
+  // restoreLayout defaults control to 360px; drag +60px -> 420
+  dragSplitter(sandbox, "#controlSplitter", 500, 560);
+  assert.equal(readInlinePx(workspace, "--control-width"), 420, "control width tracks cursor delta in px");
+  assert.ok(workspace.style.getPropertyValue("--control-width").endsWith("px"));
+});
+
+test("canvas/details divider drag writes --canvas-height in px (vertical, no % jump)", () => {
+  const sandbox = buildSandbox();
+  // Set the real ~14px splitter height BEFORE load so restoreLayout computes correct defaults.
+  sandbox.document.querySelector("#resultSplitter").offsetHeight = 14;
+  loadApp(sandbox);
+  const resultSplit = sandbox.document.querySelector("#resultSplit");
+  // restoreLayout defaults canvas to 55% of clientHeight(800) = 440; drag +100 -> 540
+  dragSplitter(sandbox, "#resultSplitter", 500, 600, "y");
+  assert.equal(readInlinePx(resultSplit, "--canvas-height"), 540, "canvas height is pixel-accurate, not percentage");
+  assert.ok(resultSplit.style.getPropertyValue("--canvas-height").endsWith("px"));
+});
+
+test("splitter drag is clamped to live min/max bounds", () => {
+  const sandbox = buildSandbox();
+  loadApp(sandbox);
+  const workspace = sandbox.document.querySelector(".workspace");
+  // max = min(620, 1000*0.5) = 500; drag far beyond -> clamp
+  dragSplitter(sandbox, "#controlSplitter", 500, 5500);
+  assert.equal(readInlinePx(workspace, "--control-width"), 500, "control width clamped to max");
+});
+
+test("restoreLayout clamps out-of-range persisted values to viewport", () => {
+  const sandbox = buildSandbox();
+  sandbox.document.querySelector("#resultSplitter").offsetHeight = 14;
+  sandbox.localStorage.setItem("hair-counter:layout", JSON.stringify({ control: "9999px", canvas: "-50px" }));
+  loadApp(sandbox);
+  const workspace = sandbox.document.querySelector(".workspace");
+  const resultSplit = sandbox.document.querySelector("#resultSplit");
+  assert.equal(readInlinePx(workspace, "--control-width"), 500, "control clamped from 9999 to max 500");
+  assert.equal(readInlinePx(resultSplit, "--canvas-height"), 200, "canvas clamped from -50 to min 200");
+});
+
+test("double-click on a splitter resets that axis to default", () => {
+  const sandbox = buildSandbox();
+  loadApp(sandbox);
+  const workspace = sandbox.document.querySelector(".workspace");
+  const splitter = sandbox.document.querySelector("#controlSplitter");
+  dragSplitter(sandbox, "#controlSplitter", 500, 650); // 360 + 150 = 510 -> clamp max 500
+  assert.equal(readInlinePx(workspace, "--control-width"), 500, "precondition: dragged away from default");
+  splitter._listeners.dblclick[0]();
+  assert.equal(readInlinePx(workspace, "--control-width"), 360, "double-click resets control to 360");
+});
+
+test("reset layout button clears storage and restores defaults", () => {
+  const sandbox = buildSandbox();
+  sandbox.document.querySelector("#resultSplitter").offsetHeight = 14;
+  loadApp(sandbox);
+  const workspace = sandbox.document.querySelector(".workspace");
+  const resultSplit = sandbox.document.querySelector("#resultSplit");
+  const btn = sandbox.document.querySelector("#resetLayoutButton");
+  dragSplitter(sandbox, "#controlSplitter", 500, 650);   // -> clamp 500
+  dragSplitter(sandbox, "#resultSplitter", 500, 800, "y"); // 440 + 300 = 740 -> clamp 626
+  assert.notEqual(readInlinePx(workspace, "--control-width"), 360, "precondition: control perturbed");
+  assert.notEqual(readInlinePx(resultSplit, "--canvas-height"), 440, "precondition: canvas perturbed");
+  btn._listeners.click[0]();
+  assert.equal(readInlinePx(workspace, "--control-width"), 360, "control restored to 360");
+  assert.equal(readInlinePx(resultSplit, "--canvas-height"), 440, "canvas restored to 55% of 800 = 440");
+  assert.equal(sandbox.localStorage.getItem("hair-counter:layout"), null, "layout storage cleared");
+});
+
+test("canvas fullscreen toggle adds body class and updates button label", () => {
+  const sandbox = buildSandbox();
+  loadApp(sandbox);
+  const body = sandbox.document.body;
+  const btn = sandbox.document.querySelector("#fullscreenButton");
+  assert.equal(body.classList.contains("viewer-fullscreen"), false, "starts not fullscreen");
+  btn._listeners.click[0]();
+  assert.equal(body.classList.contains("viewer-fullscreen"), true, "click enters fullscreen");
+  assert.equal(btn.textContent, "退出全屏", "button label flips to exit");
+  // Esc exits fullscreen.
+  sandbox.document.dispatchEvent({ type: "keydown", key: "Escape" });
+  assert.equal(body.classList.contains("viewer-fullscreen"), false, "Esc exits fullscreen");
+  assert.equal(btn.textContent, "全屏", "button label restored");
 });

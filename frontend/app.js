@@ -1647,51 +1647,107 @@ document.documentElement.style.setProperty("--adjusted", state.colors.adjusted);
 updateImageViewToggle();
 setEditMode("view");
 
-// 三窗口独立缩放：分隔条拖拽 + 布局持久化
+// 三窗口独立缩放：分隔条拖拽 + 布局持久化（像素驱动，手柄与分割线 1:1 对齐）
 (function setupResizableLayout() {
   const controlSplitter = $("#controlSplitter");
   const resultSplitter = $("#resultSplitter");
   const workspaceEl = $(".workspace");
   const resultSplitEl = $("#resultSplit");
-  const viewerCard = $("#viewerCard");
   const LAYOUT_KEY = "hair-counter:layout";
 
-  function readVar(element, name) {
-    const value = getComputedStyle(element).getPropertyValue(name).trim();
-    const parsed = parseFloat(value);
-    return Number.isNaN(parsed) ? null : parsed;
+  // 读取我们写入的内联 style（浏览器中即 getComputedStyle 的源；测试桩也能命中）。
+  // axis="y" 时百分比按高度解析（用于画布/明细纵向分隔）。
+  function readInlinePx(el, name, axis) {
+    const raw = (el.style.getPropertyValue(name) || "").trim();
+    if (!raw) return null;
+    if (raw.endsWith("%")) {
+      const pct = parseFloat(raw);
+      const base = axis === "y" ? (el.clientHeight || 800) : (el.clientWidth || 1000);
+      return Number.isNaN(pct) ? null : (pct / 100) * base;
+    }
+    const px = parseFloat(raw);
+    return Number.isNaN(px) ? null : px;
   }
+
+  // 边界在每次拖拽/缩放时实时计算，避免窗口变化后失效。
+  function getLiveBounds(which) {
+    if (which === "control") {
+      const total = workspaceEl.clientWidth || 1000;
+      return { min: 260, max: Math.min(620, Math.round(total * 0.5)) };
+    }
+    const total = resultSplitEl.clientHeight || 800;
+    const splitterH = resultSplitter.offsetHeight || 14;
+    const detailsMin = 160;
+    return { min: 200, max: Math.max(200, total - detailsMin - splitterH) };
+  }
+
+  function clampValue(which, px) {
+    const { min, max } = getLiveBounds(which);
+    return Math.max(min, Math.min(max, Math.round(px)));
+  }
+
+  function applyControl(px) {
+    workspaceEl.style.setProperty("--control-width", `${clampValue("control", px)}px`);
+  }
+  function applyCanvas(px) {
+    resultSplitEl.style.setProperty("--canvas-height", `${clampValue("canvas", px)}px`);
+  }
+
   function saveLayout() {
     try {
       localStorage.setItem(LAYOUT_KEY, JSON.stringify({
-        control: getComputedStyle(workspaceEl).getPropertyValue("--control-width").trim(),
-        viewer: getComputedStyle(resultSplitEl).getPropertyValue("--viewer-width").trim(),
+        control: workspaceEl.style.getPropertyValue("--control-width").trim(),
+        canvas: resultSplitEl.style.getPropertyValue("--canvas-height").trim(),
       }));
     } catch (_) {}
   }
+
   function restoreLayout() {
+    let controlPx = 360;
+    let canvasPx = null;
     try {
       const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}");
-      if (saved.control) workspaceEl.style.setProperty("--control-width", saved.control);
-      if (saved.viewer) resultSplitEl.style.setProperty("--viewer-width", saved.viewer);
+      if (saved && saved.control) {
+        const m = parseFloat(saved.control);
+        if (!Number.isNaN(m)) controlPx = m;
+      }
+      if (saved && saved.canvas) {
+        const m = parseFloat(saved.canvas);
+        if (!Number.isNaN(m)) canvasPx = m;
+      }
     } catch (_) {}
+    applyControl(controlPx);
+    if (canvasPx == null) canvasPx = (resultSplitEl.clientHeight || 800) * 0.55;
+    applyCanvas(canvasPx);
   }
-  function makeSplitter(splitter, getStart, apply, min, max, onCommit) {
+
+  function resetAxis(which) {
+    if (which === "control") applyControl(360);
+    else applyCanvas((resultSplitEl.clientHeight || 800) * 0.55);
+    saveLayout();
+  }
+
+  function makeSplitter(splitter, which, axis, getStart, apply, onCommit) {
+    const posOf = (ev) => (axis === "y" ? ev.clientY : ev.clientX);
     splitter.addEventListener("pointerdown", (event) => {
       event.preventDefault();
-      const start = event.clientX;
-      const base = getStart();
+      const start = posOf(event);
+      const base = clampValue(which, getStart());
       splitter.classList.add("dragging");
       try { splitter.setPointerCapture(event.pointerId); } catch (_) {}
+      const prevSelect = document.body.style.userSelect;
+      const prevCursor = document.body.style.cursor;
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = axis === "y" ? "row-resize" : "col-resize";
       const move = (ev) => {
-        let value = base + (ev.clientX - start);
-        value = Math.max(min, Math.min(max, value));
-        apply(value);
+        apply(base + (posOf(ev) - start));
       };
       const up = () => {
         splitter.classList.remove("dragging");
         document.removeEventListener("pointermove", move);
         document.removeEventListener("pointerup", up);
+        document.body.style.userSelect = prevSelect;
+        document.body.style.cursor = prevCursor;
         onCommit();
       };
       document.addEventListener("pointermove", move);
@@ -1700,33 +1756,77 @@ setEditMode("view");
     splitter.addEventListener("keydown", (event) => {
       const step = event.shiftKey ? 48 : 16;
       let delta = 0;
-      if (event.key === "ArrowLeft") delta = -step;
-      else if (event.key === "ArrowRight") delta = step;
-      else return;
+      if (axis === "y") {
+        if (event.key === "ArrowUp") delta = -step;
+        else if (event.key === "ArrowDown") delta = step;
+        else return;
+      } else {
+        if (event.key === "ArrowLeft") delta = -step;
+        else if (event.key === "ArrowRight") delta = step;
+        else return;
+      }
       event.preventDefault();
-      const value = Math.max(min, Math.min(max, getStart() + delta));
-      apply(value);
+      apply(clampValue(which, getStart() + delta));
       onCommit();
     });
+    splitter.addEventListener("dblclick", () => resetAxis(which));
   }
 
   restoreLayout();
+
   makeSplitter(
     controlSplitter,
-    () => readVar(workspaceEl, "--control-width") ?? controlSplitter.previousElementSibling.offsetWidth,
-    (value) => workspaceEl.style.setProperty("--control-width", `${value}px`),
-    280,
-    Math.min(560, workspaceEl.clientWidth * 0.46),
+    "control",
+    "x",
+    () => readInlinePx(workspaceEl, "--control-width") ?? (workspaceEl.clientWidth || 1000) * 0.3,
+    applyControl,
     saveLayout
   );
   makeSplitter(
     resultSplitter,
-    () => readVar(resultSplitEl, "--viewer-width") ?? (viewerCard.offsetWidth / resultSplitEl.clientWidth) * 100,
-    (value) => resultSplitEl.style.setProperty("--viewer-width", `${value}%`),
-    30,
-    75,
+    "canvas",
+    "y",
+    () => readInlinePx(resultSplitEl, "--canvas-height", "y") ?? (resultSplitEl.clientHeight || 800) * 0.55,
+    applyCanvas,
     saveLayout
   );
+
+  // 视口缩放时重新钳制已保存尺寸，避免溢出或留白。
+  if (typeof ResizeObserver !== "undefined") {
+    const reclamp = () => {
+      applyControl(readInlinePx(workspaceEl, "--control-width") ?? 360);
+      applyCanvas(readInlinePx(resultSplitEl, "--canvas-height", "y") ?? (resultSplitEl.clientHeight || 800) * 0.55);
+    };
+    const ro = new ResizeObserver(reclamp);
+    ro.observe(workspaceEl);
+    ro.observe(resultSplitEl);
+  }
+
+  const resetButton = $("#resetLayoutButton");
+  if (resetButton) resetButton.addEventListener("click", () => {
+    try { localStorage.removeItem(LAYOUT_KEY); } catch (_) {}
+    applyControl(360);
+    applyCanvas((resultSplitEl.clientHeight || 800) * 0.55);
+  });
+})();
+
+// 画布全屏：覆盖视口、隐藏左侧操作面板与明细，Esc 退出。
+(function setupFullscreen() {
+  const btn = $("#fullscreenButton");
+  if (!btn) return;
+  function setFullscreen(on) {
+    document.body.classList.toggle("viewer-fullscreen", on);
+    btn.textContent = on ? "退出全屏" : "全屏";
+    btn.setAttribute("aria-pressed", String(on));
+  }
+  btn.addEventListener("click", () => {
+    setFullscreen(!document.body.classList.contains("viewer-fullscreen"));
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.body.classList.contains("viewer-fullscreen")) {
+      setFullscreen(false);
+    }
+  });
 })();
 
 checkHealth().then(loadSession);

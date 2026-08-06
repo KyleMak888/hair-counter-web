@@ -52,6 +52,7 @@
           <span class="svip-identity"><small id="svipAccountName">—</small><strong>买断会员 · 无限使用</strong></span>
         </div>
         <div class="status-pill" id="serviceStatus"><span class="status-dot"></span><span>正在连接</span></div>
+        <button class="secondary-button" id="resetLayoutButton" type="button" title="恢复默认三栏宽度">重置布局</button>
         <button class="logout-button" id="logoutButton" type="button">退出</button>
       </div>
     </header>
@@ -267,6 +268,7 @@
                 <button class="toolbar-button" data-mode="remove" type="button" title="点击目标，逐根减少">－ 删除</button>
                 <button class="toolbar-button subtle" id="restoreButton" type="button">恢复</button>
                 <button class="toolbar-button image-view-toggle" id="imageViewToggle" type="button" aria-pressed="false">显示原图</button>
+                <button class="toolbar-button" id="fullscreenButton" type="button" aria-pressed="false" title="画布全屏查看（Esc 退出）">全屏</button>
                 <span class="color-controls">
                   <label class="color-field" title="自动识别目标颜色"><span>原始色</span><input type="color" id="colorOriginal" value="#16a34a" /></label>
                   <label class="color-field" title="人工修正后的簇高亮颜色"><span>人工色</span><input type="color" id="colorAdjusted" value="#0ea5e9" /></label>
@@ -293,7 +295,7 @@
             </div>
           </div>
 
-          <div class="splitter splitter-v" id="resultSplitter" role="separator" aria-orientation="vertical" tabindex="0" aria-label="拖动调整画布与明细宽度"></div>
+          <div class="splitter splitter-h" id="resultSplitter" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="拖动调整画布与明细高度"></div>
           <div class="details-card card" id="detailsCard">
             <div class="details-header">
               <div><h2>目标明细</h2><p>查看每个目标的位置与状态</p></div>
@@ -403,6 +405,6 @@
   <script src="/zip.js?v=1.3.0" defer></script>
   <script src="/batch-export.js?v=1.4.2" defer></script>
   <script src="/xlsx.js?v=1.4.2" defer></script>
-  <script src="/app.js?v=1.4.4" defer></script>
+  <script src="/app.js?v=1.4.7" defer></script>
 </body>
 </html>
